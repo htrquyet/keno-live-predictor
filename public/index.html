@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Keno 80 Live Predictor — Phân Tích & Dự Đoán Bậc 2–5 Trực Tiếp</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- Toast Notification for New Draw -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Top Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand-logo">K80</div>
+      <div>
+        <h1 class="app-title">KENO 80 LIVE PREDICTOR <span class="badge-pro">BẬC 2–5 AI</span></h1>
+        <p class="app-subtitle">Tự động bắt kết quả kỳ quay trực tiếp · Đa thuật toán Markov & Chu kỳ · Tự học trọng số</p>
+      </div>
+    </div>
+
+    <div class="header-center">
+      <div class="countdown-box" id="countdownBox">
+        <div class="countdown-label">
+          <span id="nextDrawTitle">KỲ TIẾP THEO <strong id="headerNextDrawId">#---</strong></span>
+          <span class="draw-clock-target" id="headerNextDrawTime">--:--</span>
+        </div>
+        <div class="countdown-timer" id="countdownTimer">00:00</div>
+        <div class="countdown-status" id="countdownSubStatus">Chu kỳ 8 phút/kỳ (06:00 – 21:52)</div>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="live-status-pill" id="liveStatusPill">
+        <span class="pulse-dot" id="pulseDot"></span>
+        <span id="pollStatusText">Đang kết nối...</span>
+      </div>
+      <div class="header-actions">
+        <button id="btnSoundToggle" class="btn-secondary" title="Bật/tắt âm báo khi có kết quả kỳ mới">
+          🔔 Âm báo: BẬT
+        </button>
+        <button id="btnExpandHistory" class="btn-secondary" title="Tải thêm các kỳ quay lịch sử trước đó để mở rộng mẫu tính toán">
+          📥 Mở Rộng Mẫu (+Kỳ Cũ)
+        </button>
+        <button id="btnRefreshNow" class="btn-primary">
+          🔄 Quét Kết Quả Ngay
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="dashboard-container">
+    <!-- ROW 1: Latest Result + 80-Ball Board (Left) & Next Draw Prediction Bậc 2-5 (Right) -->
+    <section class="grid-two-col">
+      <!-- Left Card: Latest Draw Result & 80 Ball Matrix -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">🔴 KẾT QUẢ KỲ QUAY MỚI NHẤT</h2>
+            <p class="card-sub" id="latestDrawMeta">Đang tải dữ liệu...</p>
+          </div>
+          <div class="latest-badges" id="latestDrawBadges">
+            <span class="stat-pill">Chẵn: --</span>
+            <span class="stat-pill">Lẻ: --</span>
+            <span class="stat-pill">Lớn: --</span>
+            <span class="stat-pill">Nhỏ: --</span>
+          </div>
+        </div>
+
+        <!-- 20 Drawn Balls -->
+        <div class="latest-balls-wrapper">
+          <div class="latest-balls-grid" id="latestBallsGrid">
+            <!-- Populated by JS -->
+          </div>
+          <div class="latest-hit-banner" id="latestHitBanner">
+            <!-- Shows how many of previous prediction hit in this draw -->
+          </div>
+        </div>
+
+        <!-- 80-Ball Interactive Matrix -->
+        <div class="board80-section">
+          <div class="board80-header">
+            <span class="section-label">MA TRẬN 80 BÓNG KENO (01 – 80)</span>
+            <div class="board-legend">
+              <span class="legend-item"><i class="dot-legend dot-drawn"></i> Vừa nổ (20 số)</span>
+              <span class="legend-item"><i class="dot-legend dot-predicted"></i> Dự đoán Bậc 5 kỳ tới</span>
+              <span class="legend-item"><i class="dot-legend dot-both"></i> Vừa nổ + Dự đoán rơi lại</span>
+            </div>
+          </div>
+          <div class="board80-grid" id="board80Grid">
+            <!-- 80 balls rendered by JS -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Card: Next Draw Prediction (Bậc 2 - Bậc 5 Specialist) -->
+      <div class="card card-highlight">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">🎯 DỰ ĐOÁN CHUỖI SỐ KỲ TIẾP THEO <span class="next-ky-badge" id="predNextDrawId">#---</span></h2>
+            <p class="card-sub">Cửa sổ tích lũy mở rộng: Đang tính trên toàn bộ <strong id="predSampleSize" style="color:#38bdf8;">--</strong> kỳ (tự động tăng N → N+1 sau mỗi kỳ)</p>
+          </div>
+          <div class="strategy-selector">
+            <label for="strategySelect">Trường phái:</label>
+            <select id="strategySelect" class="select-input">
+              <option value="adaptive">🧠 Đa Thuật Toán Tự Học (Khuyên dùng)</option>
+              <option value="markov">🔗 Ưu Tiên Ma Trận Kéo Theo (Markov)</option>
+              <option value="hot">🔥 Ưu Tiên Cầu Bệt & Số Nóng</option>
+              <option value="due">⏳ Ưu Tiên Điểm Rơi Chu Kỳ Gan</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 4 VIP Tier Cards (Bậc 2, Bậc 3, Bậc 4, Bậc 5) -->
+        <div class="tiers-grid" id="tiersGrid">
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- Top 4 Synergy Pairs for Bậc 2 -->
+        <div class="synergy-section">
+          <div class="section-header-row">
+            <span class="section-label">⚡ TOP 4 CẶP SONG THỦ BẬC 2 (HỢP LỰC CAO NHẤT)</span>
+            <span class="section-hint">Ưu tiên các cặp số có tần suất nổ chung nhiều nhất & phong độ mạnh</span>
+          </div>
+          <div class="pairs-grid" id="topPairsGrid">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <!-- Parity & Size Prediction -->
+        <div class="parity-size-grid" id="paritySizeGrid">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ROW 2: Adaptive Weights + Top 12 Ranked Numbers + Hot/Cold/Zones -->
+    <section class="grid-three-col">
+      <!-- Column 1: Self-Learning Algorithm Weights & Zone Distribution -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">⚙️ TRỌNG SỐ ĐA THUẬT TOÁN (TỰ HỌC)</h2>
+            <p class="card-sub">Tự động điều chỉnh trọng số sau mỗi kỳ dựa trên độ chính xác thực tế</p>
+          </div>
+        </div>
+        <div class="weights-list" id="weightsList">
+          <!-- Populated by JS -->
+        </div>
+
+        <div class="zones-section">
+          <span class="section-label">📊 MẬT ĐỘ 8 VÙNG ĐẦU SỐ (5 KỲ GẦN NHẤT)</span>
+          <div class="zones-bars" id="zonesBars">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Column 2: Top 12 Highest Scored Numbers Breakdown -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">🏆 TOP 12 CON SỐ ĐIỂM CAO NHẤT KỲ TỚI</h2>
+            <p class="card-sub">Chi tiết điểm thành phần của từng số được máy chấm</p>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="data-table compact-table">
+            <thead>
+              <tr>
+                <th>Hạng</th>
+                <th>Số</th>
+                <th>Điểm Tổng</th>
+                <th>Tin Cậy</th>
+                <th>Tần Suất Toàn Mẫu (12k)</th>
+                <th>Chu Kỳ / Gan</th>
+                <th>Trạng Thái Phong Độ</th>
+              </tr>
+            </thead>
+            <tbody id="top12TableBody">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Column 3: Hot / Cold / Streak Numbers -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">🔥 THỐNG KÊ NHỊP CẦU NÓNG / LẠNH / BỆT</h2>
+            <p class="card-sub">Phân tích trên <span id="statTotalDraws">--</span> kỳ quay gần nhất</p>
+          </div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-group-title">🔥 Số Nóng (Về nhiều nhất trên toàn mẫu tích lũy)</div>
+          <div class="mini-balls-list" id="hotNumbersList"></div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-group-title">🔁 Cầu Bệt (Đang nổ liên tiếp >= 2 kỳ)</div>
+          <div class="mini-balls-list" id="streakNumbersList"></div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-group-title">❄️ Số Lạnh / Gan (Lâu chưa xuất hiện nhất)</div>
+          <div class="mini-balls-list" id="coldNumbersList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ROW 3: Walk-Forward Backtest Verification & Recent Draw History -->
+    <section class="grid-two-col-bottom">
+      <!-- Walk-Forward Backtest Verification -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">✅ ĐỐI SOÁT DỰ ĐOÁN THỰC TẾ (CỬA SỔ MỞ RỘNG N → N+1)</h2>
+            <p class="card-sub">Mỗi kỳ quay mới đều lấy toàn bộ N kỳ trước đó để tính toán và tự học lũy tiến</p>
+          </div>
+          <div class="backtest-summary-badges" id="backtestSummaryBadges">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Kỳ Quay</th>
+                <th>Dự Đoán Bậc 2</th>
+                <th>Dự Đoán Bậc 3</th>
+                <th>Dự Đoán Bậc 4</th>
+                <th>Dự Đoán Bậc 5</th>
+                <th>Kết Quả Đối Soát</th>
+              </tr>
+            </thead>
+            <tbody id="backtestTableBody">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Full Recent Draw History -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">📜 LỊCH SỬ CÁC KỲ QUAY GẦN NHẤT</h2>
+            <p class="card-sub">Cập nhật tự động ngay khi kỳ quay kết thúc</p>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Kỳ</th>
+                <th>Giờ</th>
+                <th>20 Số Kết Quả</th>
+                <th>Chẵn/Lẻ · Lớn/Nhỏ</th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+

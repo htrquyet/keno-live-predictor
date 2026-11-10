@@ -1,0 +1,13 @@
+{
+  "name": "keno-live-predictor",
+  "version": "1.0.0",
+  "description": "Real-time Vietlott Keno 80 result tracker, statistical analyzer, and adaptive Bậc 2-5 prediction web app",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+

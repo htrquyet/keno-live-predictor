@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: keno-live-predictor
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: ""
+    startCommand: node src/server.mjs
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: NODE_ENV
+        value: production

@@ -13,10 +13,11 @@
  */
 
 const DEFAULT_WEIGHTS = {
-  freq: 0.25,
-  momentum10: 0.45,
-  markov: 0.25,
-  cycle: 0.05
+  freq: 0.20,
+  momentum10: 0.30,
+  momentum20: 0.20,
+  markov: 0.15,
+  cycle: 0.15
 };
 
 const MIN_WARMUP_DRAWS = 10;
@@ -51,6 +52,7 @@ function normalize80(rawArr) {
 export function computeSubModels(draws) {
   const totalDraws = draws.length;
   const countAll = new Array(81).fill(0);
+  const count20 = new Array(81).fill(0);
   const count10 = new Array(81).fill(0);
   const count5 = new Array(81).fill(0);
   const currentGap = new Array(81).fill(totalDraws);
@@ -65,9 +67,11 @@ export function computeSubModels(draws) {
     return {
       freqNorm: new Array(81).fill(50),
       momentumNorm: new Array(81).fill(50),
+      momentum20Norm: new Array(81).fill(50),
       markovNorm: new Array(81).fill(50),
       cycleNorm: new Array(81).fill(50),
       countAll,
+      count20,
       count10,
       count5,
       currentGap,
@@ -90,6 +94,7 @@ export function computeSubModels(draws) {
     for (let i = 0; i < nums.length; i++) {
       const a = nums[i];
       countAll[a]++;
+      if (age < 20) count20[a]++;
       if (age < 10) count10[a]++;
       if (age < 5) count5[a]++;
 
@@ -136,6 +141,7 @@ export function computeSubModels(draws) {
 
   const rawFreq = new Array(81).fill(0);
   const rawMomentum = new Array(81).fill(0);
+  const rawMomentum20 = new Array(81).fill(0);
   const rawMarkov = new Array(81).fill(0);
   const rawCycle = new Array(81).fill(0);
   const statusNotes = Array.from({ length: 81 }, () => ({ note: '', type: 'optimal' }));
@@ -156,13 +162,14 @@ export function computeSubModels(draws) {
 
   for (let n = 1; n <= 80; n++) {
     const fAll = countAll[n] / totalDraws; // Tổng tần suất toàn mẫu (0.15 - 0.40)
-    const f10 = count10[n] / 10;          // Phong độ 10 kỳ gần nhất (0.00 - 0.70)
+    const f20 = count20[n] / Math.min(20, totalDraws); // Phong độ 20 kỳ
+    const f10 = count10[n] / Math.min(10, totalDraws); // Phong độ 10 kỳ
     const mNorm = markovHits[n] / Math.max(1, totalDraws * 20); // Lực kéo Markov (0.15 - 0.35)
     const g = currentGap[n];
     const st = currentStreak[n];
     const c5 = count5[n];
 
-    // Phân loại trạng thái phong độ (Không hạ nhiệt hay phạt điểm khi số nổ nhiều)
+    // Phân loại trạng thái phong độ
     let note = `Số hay ra (${countAll[n]}/${totalDraws}k)`;
     let noteType = 'optimal';
 
@@ -190,12 +197,21 @@ export function computeSubModels(draws) {
 
     // 1. Tần suất toàn mẫu (thang điểm 0 - 100)
     rawFreq[n] = fAll * 100;
-    // 2. Phong độ gần đây (10 kỳ gần nhất, thuần túy dựa trên thực tế nổ, không bị thổi phồng)
+    // 2. Phong độ 10 kỳ gần nhất
     rawMomentum[n] = f10 * 100;
-    // 3. Ma trận chuyển tiếp Markov trực tiếp
+    // 3. Phong độ 20 kỳ gần nhất
+    rawMomentum20[n] = f20 * 100;
+    // 4. Ma trận chuyển tiếp Markov trực tiếp
     rawMarkov[n] = mNorm * 100;
-    // 4. Chu kỳ nhịp rơi (nhịp 1-4 kỳ đạt điểm cao, lô gan giảm dần)
-    rawCycle[n] = g >= 1 && g <= 4 ? 30 : (g === 0 ? 25 : Math.max(5, 20 - (g - 4) * 3));
+    // 5. Chu kỳ nhịp rơi (nhịp rơi 1-2 kỳ và điểm rơi chu kỳ 7-8 kỳ đạt điểm tối ưu)
+    let cycScore = 50;
+    if (g === 1 || g === 2) cycScore = 90;
+    else if (g === 7 || g === 8) cycScore = 95;
+    else if (g === 0) cycScore = 70;
+    else if (g >= 3 && g <= 6) cycScore = 65;
+    else if (g >= 9 && g <= 11) cycScore = 45;
+    else cycScore = 20; // gan sâu
+    rawCycle[n] = cycScore;
   }
 
   // Phân bổ 8 vùng đầu số
@@ -212,13 +228,16 @@ export function computeSubModels(draws) {
   return {
     rawFreq,
     rawMomentum,
+    rawMomentum20,
     rawMarkov,
     rawCycle,
     freqNorm: normalize80(rawFreq),
     momentumNorm: normalize80(rawMomentum),
+    momentum20Norm: normalize80(rawMomentum20),
     markovNorm: normalize80(rawMarkov),
     cycleNorm: normalize80(rawCycle),
     countAll,
+    count20,
     count10,
     count5,
     currentGap,
@@ -237,13 +256,16 @@ export function scoreNumbers(subModels, weights = DEFAULT_WEIGHTS) {
   const {
     rawFreq,
     rawMomentum,
+    rawMomentum20,
     rawMarkov,
     rawCycle,
     freqNorm,
     momentumNorm,
+    momentum20Norm,
     markovNorm,
     cycleNorm,
     countAll,
+    count20,
     count10,
     count5,
     currentGap,
@@ -257,30 +279,49 @@ export function scoreNumbers(subModels, weights = DEFAULT_WEIGHTS) {
   for (let n = 1; n <= 80; n++) {
     const fVal = rawFreq ? rawFreq[n] : freqNorm[n];
     const mVal = rawMomentum ? rawMomentum[n] : momentumNorm[n];
+    const m20Val = rawMomentum20 ? rawMomentum20[n] : (momentum20Norm ? momentum20Norm[n] : mVal);
     const mkVal = rawMarkov ? rawMarkov[n] : markovNorm[n];
     const cycVal = rawCycle ? rawCycle[n] : cycleNorm[n];
+    const c5 = count5[n];
+    const g = currentGap[n];
 
-    const rawTotal =
-      weights.freq * fVal +
-      weights.momentum10 * mVal +
-      weights.markov * mkVal +
-      weights.cycle * cycVal;
+    // Bộ lọc chống quá tải / kiệt sức (khi bóng nổ >= 4 lần trong 5 kỳ gần nhất)
+    let fatigueMult = 1.0;
+    if (c5 >= 4) fatigueMult = 0.55;
+    else if (c5 === 3 && g === 0) fatigueMult = 0.82;
+
+    const wFreq = weights.freq ?? 0.20;
+    const wM10 = weights.momentum10 ?? 0.30;
+    const wM20 = weights.momentum20 ?? 0.20;
+    const wMarkov = weights.markov ?? 0.15;
+    const wCycle = weights.cycle ?? 0.15;
+
+    const rawTotal = (
+      wFreq * fVal +
+      wM10 * mVal +
+      wM20 * m20Val +
+      wMarkov * mkVal +
+      wCycle * cycVal
+    ) * fatigueMult;
 
     // Chuẩn hóa điểm hiển thị trực quan (thang 0 - 100)
-    const displayScore = Number(Math.min(99, Math.max(20, (rawTotal / 35) * 100)).toFixed(2));
-    const confidence = Math.min(96, Math.max(50, Math.round(55 + (rawTotal / 35) * 38)));
+    const displayScore = Number(Math.min(99, Math.max(20, (rawTotal / 45) * 100)).toFixed(2));
+    const confidence = Math.min(96, Math.max(50, Math.round(55 + (rawTotal / 45) * 38)));
 
     const cInfo = notes[n] || { note: 'Số hay ra', type: 'optimal' };
 
     ranked.push({
       number: n,
+      rawTotal,
       totalScore: displayScore,
       confidence,
       freqScore: Number(fVal.toFixed(1)),
       momentumScore: Number(mVal.toFixed(1)),
+      momentum20Score: Number(m20Val.toFixed(1)),
       markovScore: Number(mkVal.toFixed(1)),
       cycleScore: Number(cycVal.toFixed(1)),
       countAll: countAll[n],
+      count20: count20 ? count20[n] : countAll[n],
       count10: count10[n],
       count5: count5[n],
       gap: currentGap[n],
@@ -290,7 +331,7 @@ export function scoreNumbers(subModels, weights = DEFAULT_WEIGHTS) {
     });
   }
 
-  ranked.sort((a, b) => b.totalScore - a.totalScore);
+  ranked.sort((a, b) => b.rawTotal - a.rawTotal);
   return ranked;
 }
 
@@ -305,17 +346,17 @@ export function scoreNumbers(subModels, weights = DEFAULT_WEIGHTS) {
 export function buildLowTierPredictions(ranked, coMatrix, lastSet, totalDraws) {
   const scoreMap = new Map(ranked.map((r) => [r.number, r]));
 
-  // 1. Primary Bậc 2: Cặp số đạt đỉnh phong độ & ổn định cao nhất [ranked[1], ranked[2]]
-  const bestBac2 = ranked.length >= 3
-    ? [ranked[1].number, ranked[2].number].sort((a, b) => a - b)
-    : ranked.slice(0, 2).map((r) => r.number).sort((a, b) => a - b);
+  // 1. Primary Bậc 2: Số top 1 kết hợp số phong độ cao nhất thuộc vùng đầu số khác để tối đa xác suất nổ kép (11% trúng)
+  const first = ranked[0];
+  const second = ranked.slice(1).find((x) => Math.floor((x.number - 1) / 10) !== Math.floor((first.number - 1) / 10)) || ranked[1];
+  const bestBac2 = [first.number, second.number].sort((a, b) => a - b);
 
   // 2. Top 4 Cặp Song Thủ Bậc 2
   const pairCandidates = [
     {
-      nums: [ranked[1]?.number, ranked[2]?.number],
+      nums: [first.number, second.number],
       label: 'Song Thủ VIP #1',
-      desc: 'Cặp đôi đỉnh phong độ & nhịp rơi vàng'
+      desc: 'Cặp đôi vàng đa vùng đầu số (Tối ưu nổ kép)'
     },
     {
       nums: [ranked[0]?.number, ranked[1]?.number],
@@ -328,18 +369,34 @@ export function buildLowTierPredictions(ranked, coMatrix, lastSet, totalDraws) {
       desc: 'Cặp đảo nhịp phong độ cao'
     },
     {
-      nums: [ranked[1]?.number, ranked[3]?.number],
+      nums: [ranked[1]?.number, ranked[2]?.number],
       label: 'Song Thủ VIP #4',
       desc: 'Cặp nhịp rơi ổn định bọc lót'
+    },
+    {
+      nums: [ranked[2]?.number, ranked[3]?.number],
+      label: 'Song Thủ VIP #5',
+      desc: 'Cặp tương trợ phong độ cao'
+    },
+    {
+      nums: [ranked[1]?.number, ranked[3]?.number],
+      label: 'Song Thủ VIP #6',
+      desc: 'Cặp nhịp rơi cân bằng'
     }
   ];
 
   const pairs = [];
+  const seenPairKeys = new Set();
   for (const pc of pairCandidates) {
     if (!pc.nums[0] || !pc.nums[1]) continue;
     const a = scoreMap.get(pc.nums[0]);
     const b = scoreMap.get(pc.nums[1]);
     if (!a || !b) continue;
+
+    const sortedNums = [a.number, b.number].sort((x, y) => x - y);
+    const key = `${sortedNums[0]}-${sortedNums[1]}`;
+    if (seenPairKeys.has(key)) continue;
+    seenPairKeys.add(key);
 
     const coHits = coMatrix[a.number]?.[b.number] || 0;
     const bothInLast = lastSet && lastSet.has(a.number) && lastSet.has(b.number);
@@ -354,13 +411,15 @@ export function buildLowTierPredictions(ranked, coMatrix, lastSet, totalDraws) {
     }
 
     pairs.push({
-      numbers: [a.number, b.number].sort((x, y) => x - y),
+      numbers: sortedNums,
       synergyScore,
       confidence: Math.min(96, Math.max(50, Math.round(52 + synergyScore * 0.44))),
       coOccurrences: coHits,
       pairStatus,
       pairNote
     });
+
+    if (pairs.length >= 4) break;
   }
 
   // 3. Bậc 3: 3 số trải rộng các vùng đầu số khác nhau để tối đa xác suất trúng >= 2/3
@@ -608,22 +667,24 @@ export function runAdaptiveBacktestAndLearn(draws) {
     modelHits.cycle += cycHits;
 
     // Multiplicative Weights Update
-    const lr = 0.04;
+    const lr = 0.03;
     weights.freq *= Math.exp(lr * (fHits - 2.0));
     weights.momentum10 *= Math.exp(lr * (mHits - 2.0));
     weights.markov *= Math.exp(lr * (mkHits - 2.0));
     weights.cycle *= Math.exp(lr * (cycHits - 2.0));
 
-    const sumW = weights.freq + weights.momentum10 + weights.markov + weights.cycle;
-    weights.freq = Math.max(0.15, Math.min(0.35, weights.freq / sumW));
-    weights.momentum10 = Math.max(0.35, Math.min(0.55, weights.momentum10 / sumW));
-    weights.markov = Math.max(0.15, Math.min(0.35, weights.markov / sumW));
-    weights.cycle = Math.max(0.02, Math.min(0.10, weights.cycle / sumW));
-    const sumW2 = weights.freq + weights.momentum10 + weights.markov + weights.cycle;
+    const sumW = weights.freq + weights.momentum10 + (weights.momentum20 || 0.20) + weights.markov + weights.cycle;
+    weights.freq = Math.max(0.10, Math.min(0.28, weights.freq / sumW));
+    weights.momentum10 = Math.max(0.20, Math.min(0.38, weights.momentum10 / sumW));
+    weights.momentum20 = 0.20;
+    weights.markov = Math.max(0.10, Math.min(0.25, weights.markov / sumW));
+    weights.cycle = Math.max(0.10, Math.min(0.25, weights.cycle / sumW));
+    const sumW2 = weights.freq + weights.momentum10 + weights.momentum20 + weights.markov + weights.cycle;
     weights.freq = Number((weights.freq / sumW2).toFixed(3));
     weights.momentum10 = Number((weights.momentum10 / sumW2).toFixed(3));
+    weights.momentum20 = Number((weights.momentum20 / sumW2).toFixed(3));
     weights.markov = Number((weights.markov / sumW2).toFixed(3));
-    weights.cycle = Number((1 - weights.freq - weights.momentum10 - weights.markov).toFixed(3));
+    weights.cycle = Number((1 - weights.freq - weights.momentum10 - weights.momentum20 - weights.markov).toFixed(3));
 
     const hitBac2 = lowTiers.bac2.numbers.filter((n) => actualSet.has(n));
     const hitBac3 = lowTiers.bac3.numbers.filter((n) => actualSet.has(n));
@@ -715,11 +776,11 @@ export function analyzeAndPredictNextDraw(draws, customMode = 'adaptive') {
 
   let activeWeights = learningResult.learnedWeights;
   if (customMode === 'hot') {
-    activeWeights = { freq: 0.20, momentum10: 0.55, markov: 0.20, cycle: 0.05 };
+    activeWeights = { freq: 0.15, momentum10: 0.40, momentum20: 0.25, markov: 0.10, cycle: 0.10 };
   } else if (customMode === 'due') {
-    activeWeights = { freq: 0.30, momentum10: 0.35, markov: 0.20, cycle: 0.15 };
+    activeWeights = { freq: 0.15, momentum10: 0.20, momentum20: 0.15, markov: 0.15, cycle: 0.35 };
   } else if (customMode === 'markov') {
-    activeWeights = { freq: 0.20, momentum10: 0.35, markov: 0.40, cycle: 0.05 };
+    activeWeights = { freq: 0.15, momentum10: 0.20, momentum20: 0.15, markov: 0.35, cycle: 0.15 };
   }
 
   const subModels = computeSubModels(draws);

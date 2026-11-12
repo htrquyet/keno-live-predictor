@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   fetchInitialHistory,
   fetchLatestDraws,
+  fetchMissingGapDraws,
   getNextDrawSchedule
 } from './crawler.mjs';
 import { analyzeAndPredictNextDraw } from './predictor.mjs';
@@ -126,6 +127,46 @@ async function pollNow(isInitial = false, pagesToFetch = 6) {
         added++;
         if (d.drawNumber > prevMaxDraw) {
           newestDraw = d;
+        }
+      }
+    }
+
+    // Auto-detect and heal any gaps if Render slept or draws were missed
+    if (prevMaxDraw > 0 && newestDraw && newestDraw.drawNumber - prevMaxDraw > 1) {
+      const missingCount = newestDraw.drawNumber - prevMaxDraw - 1;
+      console.log(`[Poll] Detected gap of ${missingCount} draws between #${prevMaxDraw} and #${newestDraw.drawNumber}. Auto-healing...`);
+      try {
+        const gapDraws = await fetchMissingGapDraws(prevMaxDraw + 1, newestDraw.drawNumber - 1);
+        for (const gd of gapDraws) {
+          if (!drawMap.has(gd.drawNumber)) {
+            drawMap.set(gd.drawNumber, gd);
+            added++;
+          }
+        }
+      } catch (err) {
+        console.warn('[Poll] Gap healing error:', err.message);
+      }
+    }
+
+    // Check for any internal historical gaps on initial load
+    if (isInitial && drawMap.size > 1) {
+      const sortedKeys = [...drawMap.keys()].sort((a, b) => a - b);
+      for (let i = 1; i < sortedKeys.length; i++) {
+        const prevId = sortedKeys[i - 1];
+        const currId = sortedKeys[i];
+        if (currId - prevId > 1 && currId - prevId <= 50) {
+          console.log(`[Poll] Healing startup internal gap between #${prevId} and #${currId}...`);
+          try {
+            const healed = await fetchMissingGapDraws(prevId + 1, currId - 1);
+            for (const hd of healed) {
+              if (!drawMap.has(hd.drawNumber)) {
+                drawMap.set(hd.drawNumber, hd);
+                added++;
+              }
+            }
+          } catch (err) {
+            console.warn('[Poll] Startup gap heal error:', err.message);
+          }
         }
       }
     }

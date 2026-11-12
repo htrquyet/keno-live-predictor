@@ -98,27 +98,44 @@ export function normalizeDraw(rawId, time, date, numbers, source = 'live') {
 }
 
 /**
+ * Helper to get date string in DD-MM-YYYY format for Vietnam timezone (UTC+7)
+ */
+export function getVnDateStr(offsetDays = 0) {
+  const d = new Date();
+  if (offsetDays !== 0) {
+    d.setDate(d.getDate() - offsetDays);
+  }
+  const dateStr = d.toLocaleDateString('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  }); // returns DD/MM/YYYY
+  return dateStr.replace(/\//g, '-');
+}
+
+/**
  * Fetch a single page of Keno results from MinhChinh
  */
-export async function fetchMinhChinhPage(page = 1) {
+export async function fetchMinhChinhPage(page = 1, dateStr = null) {
   const url = 'https://www.minhchinh.com/xo-so-dien-toan-keno.html';
+  const postBody = new URLSearchParams({
+    date: dateStr || '',
+    ky: '',
+    number: '',
+    page: String(page)
+  }).toString();
+
   const options = {
-    method: page === 1 ? 'GET' : 'POST',
+    method: 'POST',
     headers: {
       'User-Agent': USER_AGENT,
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Content-Type': 'application/x-www-form-urlencoded'
     },
-    signal: AbortSignal.timeout(8000)
+    body: postBody,
+    signal: AbortSignal.timeout(9000)
   };
-
-  if (page > 1) {
-    options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-    options.body = new URLSearchParams({
-      ky: '',
-      number: '',
-      page: String(page)
-    }).toString();
-  }
 
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -148,19 +165,37 @@ export async function fetchKetQuaDienToanLatest() {
 }
 
 /**
- * Fetch multiple pages to warm up historical dataset (up to ~45-60 draws)
+ * Fetch multiple pages across multiple days (today, yesterday, day before) to guarantee no missing draws
  */
-export async function fetchInitialHistory(pages = 3) {
+export async function fetchInitialHistory(pagesPerDay = 6) {
   const map = new Map();
+  const dates = [getVnDateStr(0), getVnDateStr(1), getVnDateStr(2)];
 
-  for (let p = 1; p <= pages; p++) {
-    try {
-      const list = await fetchMinhChinhPage(p);
-      for (const item of list) {
-        map.set(item.drawNumber, item);
+  for (const d of dates) {
+    let consecutiveEmpty = 0;
+    for (let p = 1; p <= pagesPerDay; p++) {
+      try {
+        const list = await fetchMinhChinhPage(p, d);
+        if (!list || list.length === 0) {
+          consecutiveEmpty++;
+          if (consecutiveEmpty >= 2) break;
+          continue;
+        }
+        consecutiveEmpty = 0;
+        let newCount = 0;
+        for (const item of list) {
+          if (!map.has(item.drawNumber)) {
+            map.set(item.drawNumber, item);
+            newCount++;
+          }
+        }
+        if (newCount === 0 && p > 2) {
+          // Already have all draws from this page onward
+          break;
+        }
+      } catch (err) {
+        console.warn(`[Crawler] Warn fetching page ${p} date ${d}:`, err.message);
       }
-    } catch (err) {
-      console.warn(`[Crawler] Warn fetching page ${p} from MinhChinh:`, err.message);
     }
   }
 
@@ -181,11 +216,45 @@ export async function fetchInitialHistory(pages = 3) {
 }
 
 /**
+ * Backfill any missing draws between two IDs (self-healing)
+ */
+export async function fetchMissingGapDraws(startDrawNumber, endDrawNumber) {
+  const map = new Map();
+  const dates = [getVnDateStr(0), getVnDateStr(1), getVnDateStr(2)];
+
+  for (const d of dates) {
+    for (let p = 1; p <= 7; p++) {
+      try {
+        const list = await fetchMinhChinhPage(p, d);
+        if (!list || list.length === 0) break;
+        let anyInRange = false;
+        for (const item of list) {
+          if (item.drawNumber >= startDrawNumber && item.drawNumber <= endDrawNumber) {
+            map.set(item.drawNumber, item);
+            anyInRange = true;
+          }
+        }
+        // If oldest on page is already older than startDrawNumber, stop this date
+        const minOnPage = Math.min(...list.map(x => x.drawNumber));
+        if (minOnPage < startDrawNumber && !anyInRange) {
+          break;
+        }
+      } catch (err) {
+        console.warn(`[Crawler] Gap healing error on date ${d} p${p}:`, err.message);
+      }
+    }
+  }
+
+  return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+}
+
+/**
  * Poll latest results from both sources in parallel for lowest latency
  */
 export async function fetchLatestDraws() {
   const results = await Promise.allSettled([
     fetchMinhChinhPage(1),
+    fetchMinhChinhPage(2),
     fetchKetQuaDienToanLatest()
   ]);
 

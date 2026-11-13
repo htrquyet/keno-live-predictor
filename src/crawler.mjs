@@ -209,24 +209,46 @@ export async function fetchKetQuaDienToanLatest() {
   return parseKetQuaDienToanHtml(html);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
- * Fetch multiple pages across multiple days (today, yesterday, day before) to guarantee no missing draws
+ * Fetch a MinhChinh page with polite pacing and 1 cooldown retry on empty burst rate-limit responses
  */
-export async function fetchInitialHistory(pagesPerDay = 6) {
+async function fetchMinhChinhPageGentle(page, dateStr, waitBeforeMs = 0) {
+  if (waitBeforeMs > 0) {
+    await sleep(waitBeforeMs);
+  }
+  try {
+    const list = await fetchMinhChinhPage(page, dateStr);
+    if (list && list.length > 0) {
+      return list;
+    }
+  } catch (err) {
+    console.warn(`[Crawler] Retry page ${page} date ${dateStr} after error:`, err.message);
+  }
+  // MinhChinh returns HTTP 200 empty body briefly under rapid burst requests (~3s cooldown)
+  await sleep(3500);
+  return await fetchMinhChinhPage(page, dateStr);
+}
+
+/**
+ * Shared paginated crawler across multiple MinhChinh date strings (15 draws/page => 8 pages covers 119 draws/day)
+ */
+async function crawlMinhChinhDates(dates, pagesPerDay = 8) {
   const map = new Map();
-  const dates = [getVnDateStr(0), getVnDateStr(1), getVnDateStr(2)];
+  let requestCount = 0;
 
   for (const d of dates) {
-    let consecutiveEmpty = 0;
     for (let p = 1; p <= pagesPerDay; p++) {
       try {
-        const list = await fetchMinhChinhPage(p, d);
+        const waitMs = requestCount === 0 ? 0 : 350;
+        requestCount++;
+        const list = await fetchMinhChinhPageGentle(p, d, waitMs);
         if (!list || list.length === 0) {
-          consecutiveEmpty++;
-          if (consecutiveEmpty >= 2) break;
-          continue;
+          break;
         }
-        consecutiveEmpty = 0;
         let newCount = 0;
         for (const item of list) {
           if (!map.has(item.drawNumber)) {
@@ -243,6 +265,16 @@ export async function fetchInitialHistory(pagesPerDay = 6) {
       }
     }
   }
+
+  return map;
+}
+
+/**
+ * Fetch multiple pages across multiple days (today, yesterday, day before) to guarantee no missing draws
+ */
+export async function fetchInitialHistory(pagesPerDay = 8) {
+  const dates = [getVnDateStr(0), getVnDateStr(1), getVnDateStr(2)];
+  const map = await crawlMinhChinhDates(dates, pagesPerDay);
 
   // Also check fallback in case it has a brand-new draw
   try {
@@ -263,8 +295,7 @@ export async function fetchInitialHistory(pagesPerDay = 6) {
 /**
  * Fetch older historical days strictly earlier than the current oldest stored draw
  */
-export async function fetchOlderHistoryDraws(oldestDraw = null, daysToFetch = 2, pagesPerDay = 7) {
-  const map = new Map();
+export async function fetchOlderHistoryDraws(oldestDraw = null, daysToFetch = 2, pagesPerDay = 8) {
   const vn = getVnNowParts();
   const todayUtcMs = Date.UTC(vn.year, vn.month - 1, vn.day);
   const parsedOldestMs = oldestDraw ? parseSlashDateToUtcMs(oldestDraw.date) : null;
@@ -280,33 +311,7 @@ export async function fetchOlderHistoryDraws(oldestDraw = null, daysToFetch = 2,
     dates.push(formatUtcMsToDash(dayMs));
   }
 
-  for (const d of dates) {
-    let consecutiveEmpty = 0;
-    for (let p = 1; p <= pagesPerDay; p++) {
-      try {
-        const list = await fetchMinhChinhPage(p, d);
-        if (!list || list.length === 0) {
-          consecutiveEmpty++;
-          if (consecutiveEmpty >= 2) break;
-          continue;
-        }
-        consecutiveEmpty = 0;
-        let newCount = 0;
-        for (const item of list) {
-          if (!map.has(item.drawNumber)) {
-            map.set(item.drawNumber, item);
-            newCount++;
-          }
-        }
-        if (newCount === 0 && p > 2) {
-          break;
-        }
-      } catch (err) {
-        console.warn(`[Crawler] Warn fetching older page ${p} date ${d}:`, err.message);
-      }
-    }
-  }
-
+  const map = await crawlMinhChinhDates(dates, pagesPerDay);
   return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
 }
 
@@ -316,11 +321,14 @@ export async function fetchOlderHistoryDraws(oldestDraw = null, daysToFetch = 2,
 export async function fetchMissingGapDraws(startDrawNumber, endDrawNumber) {
   const map = new Map();
   const dates = [getVnDateStr(0), getVnDateStr(1), getVnDateStr(2)];
+  let requestCount = 0;
 
   for (const d of dates) {
-    for (let p = 1; p <= 7; p++) {
+    for (let p = 1; p <= 8; p++) {
       try {
-        const list = await fetchMinhChinhPage(p, d);
+        const waitMs = requestCount === 0 ? 0 : 350;
+        requestCount++;
+        const list = await fetchMinhChinhPageGentle(p, d, waitMs);
         if (!list || list.length === 0) break;
         let anyInRange = false;
         for (const item of list) {

@@ -333,7 +333,7 @@ function renderAll(state) {
   const acc = analysis.modelAccuracy;
   const weightModels = [
     {
-      name: '🔗 Ma Trận Chuyển Tiếp Shrunk Markov (Alpha=60 LLR)',
+      name: '🔗 Ma Trận Chuyển Tiếp Shrunk Markov (Alpha=150 LLR)',
       weight: Math.round(w.markov * 100),
       acc: acc.markov,
       desc: 'Tính lực kéo điều kiện từ 20 số kỳ trước với làm mượt Bayesian về nền 25%'
@@ -663,7 +663,7 @@ document.getElementById('btnExpandHistory')?.addEventListener('click', async () 
   btn.disabled = true;
   btn.textContent = '⏳ Đang nạp sâu...';
   try {
-    const data = await fetchJson('/api/expand-history?days=2&pages=7', { method: 'POST' });
+    const data = await fetchJson('/api/expand-history?days=2&pages=8', { method: 'POST' });
     renderAll(data);
     const total = data.analysis?.totalHistoricalDraws || data.refreshResult?.totalSample || '--';
     if (data.refreshResult?.added > 0) {

@@ -4,7 +4,7 @@
  *
  * Kiến trúc:
  * 1. Tín hiệu chuẩn hóa Z-score & Empirical-Bayes Shrinkage:
- *    - Markov bậc 1 (trans1) làm mượt Beta/Dirichlet (alpha = 60 kéo về nền 0.25) dạng Log-Likelihood Ratio.
+ *    - Markov bậc 1 (trans1) làm mượt Beta/Dirichlet (alpha = 150 kéo về nền 0.25) dạng Log-Likelihood Ratio.
  *    - Tần suất lũy tiến (Expanding Frequency) & EWMA đa khung (HL = 12, HL = 28) dạng Log-Odds.
  *    - Chu kỳ nhịp rơi & chống kiệt sức hiệu chuẩn về Z-score đồng nhất thang đo.
  * 2. Pair-First Scoring (3.160 cặp):
@@ -18,11 +18,11 @@ const BASE_P = 0.25;
 const BASE_PAIR_P = (20 * 19) / (80 * 79); // ~0.06012658 (380/6320)
 
 const DEFAULT_WEIGHTS = {
-  freq: 0.10,
-  momentum10: 0.05,
-  momentum20: 0.05,
-  markov: 0.75,
-  cycle: 0.05
+  freq: 0.20,
+  momentum10: 0.10,
+  momentum20: 0.10,
+  markov: 0.35,
+  cycle: 0.25
 };
 
 const MODE_WEIGHTS = {
@@ -35,7 +35,7 @@ const MODE_WEIGHTS = {
 const MIN_WARMUP_DRAWS = 10;
 const PAIR_CO_WEIGHT = 0.15;
 const PAIR_ZONE_WEIGHT = 0.10;
-const MARKOV_ALPHA = 60;
+const MARKOV_ALPHA = 150;
 
 // Theoretical Keno benchmarks (uniform 20/80 draw, 10,000đ ticket)
 export const THEORETICAL_KENO = {
@@ -724,9 +724,10 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
     modelHits.markov += top8Hits(sub.zMarkov);
     modelHits.cycle += top8Hits(sub.zCycle);
 
-    // Online predictive Z-correlation weight adaptation (bounded around Markov anchor)
+    // Regularized online predictive Z-correlation weight adaptation with mean-reversion toward balanced prior
     if (isAdaptive) {
-      const lr = 0.03;
+      const lr = 0.012;
+      const blend = 0.02;
       const zCorr = (zArr) => {
         let s = 0;
         for (let b = 1; b <= 80; b++) {
@@ -734,18 +735,18 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
         }
         return s / 20;
       };
-      weights.freq = Math.max(0.05, Math.min(0.20, weights.freq * Math.exp(lr * zCorr(sub.zFreq))));
-      weights.momentum10 = Math.max(0.02, Math.min(0.15, weights.momentum10 * Math.exp(lr * zCorr(sub.zMomentum10))));
-      weights.momentum20 = Math.max(0.02, Math.min(0.15, weights.momentum20 * Math.exp(lr * zCorr(sub.zMomentum20))));
-      weights.markov = Math.max(0.60, Math.min(0.85, weights.markov * Math.exp(lr * zCorr(sub.zMarkov))));
-      weights.cycle = Math.max(0.02, Math.min(0.12, weights.cycle * Math.exp(lr * zCorr(sub.zCycle))));
+      weights.freq = Math.max(0.08, Math.min(0.35, (1 - blend) * weights.freq * Math.exp(lr * zCorr(sub.zFreq)) + blend * initWeights.freq));
+      weights.momentum10 = Math.max(0.04, Math.min(0.25, (1 - blend) * weights.momentum10 * Math.exp(lr * zCorr(sub.zMomentum10)) + blend * initWeights.momentum10));
+      weights.momentum20 = Math.max(0.04, Math.min(0.25, (1 - blend) * weights.momentum20 * Math.exp(lr * zCorr(sub.zMomentum20)) + blend * initWeights.momentum20));
+      weights.markov = Math.max(0.20, Math.min(0.60, (1 - blend) * weights.markov * Math.exp(lr * zCorr(sub.zMarkov)) + blend * initWeights.markov));
+      weights.cycle = Math.max(0.08, Math.min(0.45, (1 - blend) * weights.cycle * Math.exp(lr * zCorr(sub.zCycle)) + blend * initWeights.cycle));
 
       const sumW = weights.freq + weights.momentum10 + weights.momentum20 + weights.markov + weights.cycle;
-      weights.freq = Number((weights.freq / sumW).toFixed(3));
-      weights.momentum10 = Number((weights.momentum10 / sumW).toFixed(3));
-      weights.momentum20 = Number((weights.momentum20 / sumW).toFixed(3));
-      weights.markov = Number((weights.markov / sumW).toFixed(3));
-      weights.cycle = Number(Math.max(0, 1 - weights.freq - weights.momentum10 - weights.momentum20 - weights.markov).toFixed(3));
+      weights.freq /= sumW;
+      weights.momentum10 /= sumW;
+      weights.momentum20 /= sumW;
+      weights.markov /= sumW;
+      weights.cycle /= sumW;
     }
 
     const hitBac2 = lowTiers.bac2.numbers.filter((n) => actualSet.has(n));
@@ -846,8 +847,21 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
   const singleTicketCost = evalCount * 10000;
   const top4TicketCost = evalCount * 40000;
 
+  const wFreq = Number(weights.freq.toFixed(3));
+  const wM10 = Number(weights.momentum10.toFixed(3));
+  const wM20 = Number(weights.momentum20.toFixed(3));
+  const wMarkov = Number(weights.markov.toFixed(3));
+  const wCycle = Number(Math.max(0, 1 - wFreq - wM10 - wM20 - wMarkov).toFixed(3));
+  const learnedWeights = {
+    freq: wFreq,
+    momentum10: wM10,
+    momentum20: wM20,
+    markov: wMarkov,
+    cycle: wCycle
+  };
+
   return {
-    learnedWeights: weights,
+    learnedWeights,
     modelAccuracy,
     backtestHistory: backtestHistory.reverse(),
     summary: {

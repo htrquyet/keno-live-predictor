@@ -121,7 +121,7 @@ function broadcastSse(event, data) {
 /**
  * Poll live sources and merge any new draws into the expanding dataset
  */
-async function pollNow(isInitial = false, pagesToFetch = 6) {
+async function pollNow(isInitial = false, pagesToFetch = 8) {
   if (activePollPromise) {
     return activePollPromise;
   }
@@ -227,7 +227,7 @@ async function pollNow(isInitial = false, pagesToFetch = 6) {
 /**
  * Load older historical days strictly preceding the oldest draw currently stored
  */
-async function expandHistoryNow(days = 2, pagesPerDay = 7) {
+async function expandHistoryNow(days = 2, pagesPerDay = 8) {
   if (activePollPromise) {
     try {
       await activePollPromise;
@@ -394,9 +394,9 @@ const server = http.createServer(async (req, res) => {
   // Deep History Sample Expansion API (crawl older days preceding current oldest stored draw)
   if (pathname === '/api/expand-history' && req.method === 'POST') {
     const rawDays = parseInt(urlObj.searchParams.get('days') || '2', 10);
-    const rawPages = parseInt(urlObj.searchParams.get('pages') || '7', 10);
+    const rawPages = parseInt(urlObj.searchParams.get('pages') || '8', 10);
     const days = Math.min(5, Math.max(1, Number.isNaN(rawDays) ? 2 : rawDays));
-    const pages = Math.min(10, Math.max(5, Number.isNaN(rawPages) ? 7 : rawPages));
+    const pages = Math.min(10, Math.max(5, Number.isNaN(rawPages) ? 8 : rawPages));
     const result = await expandHistoryNow(days, pages);
     const payload = buildStatePayload(currentMode);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

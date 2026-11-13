@@ -117,11 +117,11 @@
           <!-- Populated by JS -->
         </div>
 
-        <!-- Top 4 Synergy Pairs for Bậc 2 -->
+        <!-- Top 4 Disjoint Synergy Pairs for Bậc 2 -->
         <div class="synergy-section">
           <div class="section-header-row">
-            <span class="section-label">⚡ TOP 4 CẶP SONG THỦ BẬC 2 (HỢP LỰC CAO NHẤT)</span>
-            <span class="section-hint">Ưu tiên các cặp số có tần suất nổ chung nhiều nhất & phong độ mạnh</span>
+            <span class="section-label">⚡ DÀN TOP 4 CẶP SONG THỦ ĐỘC LẬP (8 SỐ KHÔNG TRÙNG)</span>
+            <span class="section-hint">Chấm trực tiếp 3.160 cặp (Shrunk Markov + Co-Lift), chọn 4 cặp độc lập để tối đa P(≥1 cặp trúng)</span>
           </div>
           <div class="pairs-grid" id="topPairsGrid">
             <!-- Populated by JS -->
@@ -166,14 +166,14 @@
           </div>
         </div>
         <div class="table-scroll">
-          <table class="data-table compact-table">
+          <table class="data-table compact-table table-top12">
             <thead>
               <tr>
                 <th>Hạng</th>
                 <th>Số</th>
                 <th>Điểm Tổng</th>
                 <th>Tin Cậy</th>
-                <th>Tần Suất Toàn Mẫu (12k)</th>
+                <th>Tần Suất (Toàn Mẫu / 10k)</th>
                 <th>Chu Kỳ / Gan</th>
                 <th>Trạng Thái Phong Độ</th>
               </tr>
@@ -217,8 +217,8 @@
       <div class="card">
         <div class="card-header">
           <div>
-            <h2 class="card-title">✅ ĐỐI SOÁT DỰ ĐOÁN THỰC TẾ (CỬA SỔ MỞ RỘNG N → N+1)</h2>
-            <p class="card-sub">Mỗi kỳ quay mới đều lấy toàn bộ N kỳ trước đó để tính toán và tự học lũy tiến</p>
+            <h2 class="card-title">✅ ĐỐI SOÁT THỰC TẾ &amp; CHỈ SỐ RTP (CỬA SỔ MỞ RỘNG N → N+1)</h2>
+            <p class="card-sub">Theo dõi cả Cặp VIP #1 lẫn Dàn 4 Cặp Độc Lập và tỷ lệ hoàn vốn RTP (%) theo từng chế độ chiến lược</p>
           </div>
           <div class="backtest-summary-badges" id="backtestSummaryBadges">
             <!-- Populated by JS -->
@@ -226,14 +226,15 @@
         </div>
 
         <div class="table-scroll">
-          <table class="data-table">
+          <table class="data-table table-backtest">
             <thead>
               <tr>
                 <th>Kỳ Quay</th>
-                <th>Dự Đoán Bậc 2</th>
-                <th>Dự Đoán Bậc 3</th>
-                <th>Dự Đoán Bậc 4</th>
-                <th>Dự Đoán Bậc 5</th>
+                <th>Bậc 2 (VIP #1)</th>
+                <th>Dàn 4 Cặp Độc Lập</th>
+                <th>Bậc 3</th>
+                <th>Bậc 4</th>
+                <th>Bậc 5</th>
                 <th>Kết Quả Đối Soát</th>
               </tr>
             </thead>
@@ -253,7 +254,7 @@
           </div>
         </div>
         <div class="table-scroll">
-          <table class="data-table">
+          <table class="data-table table-history">
             <thead>
               <tr>
                 <th>Kỳ</th>

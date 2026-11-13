@@ -2,14 +2,47 @@ let appState = null;
 let soundEnabled = true;
 let localCountdownSec = 0;
 let awaitingResultFlag = false;
+let sharedAudioCtx = null;
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const formatVnd = (n) => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
 
+function unlockAudioContext() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!sharedAudioCtx) {
+      sharedAudioCtx = new AudioCtx();
+    }
+    if (sharedAudioCtx.state === 'suspended') {
+      sharedAudioCtx.resume().catch(() => {});
+    }
+    return sharedAudioCtx;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    let errDetail = `HTTP ${res.status}`;
+    try {
+      const text = await res.text();
+      if (text) errDetail += `: ${text.slice(0, 120)}`;
+    } catch {
+      // Ignore response read failure
+    }
+    throw new Error(errDetail);
+  }
+  return res.json();
+}
+
 function playNotificationChime() {
   if (!soundEnabled) return;
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = unlockAudioContext();
+    if (!ctx || ctx.state === 'suspended') return;
     const notes = [523.25, 659.25, 783.99, 1046.5];
     notes.forEach((freq, idx) => {
       const osc = ctx.createOscillator();
@@ -43,14 +76,32 @@ function showToast(message) {
 function renderPollStatus(info) {
   const dot = document.getElementById('pulseDot');
   const txt = document.getElementById('pollStatusText');
-  if (!dot || !txt) return;
-  if (info.isPolling) {
-    dot.classList.add('polling');
-  } else {
-    dot.classList.remove('polling');
+  if (dot && txt) {
+    if (info.isPolling) {
+      dot.classList.add('polling');
+    } else {
+      dot.classList.remove('polling');
+    }
+    if (info.lastPollStatus) {
+      txt.textContent = info.lastPollStatus;
+    }
   }
-  if (info.lastPollStatus) {
-    txt.textContent = info.lastPollStatus;
+
+  // Keep client timer and awaiting state synced even when polls find 0 new draws
+  if (info.schedule) {
+    const s = info.schedule;
+    awaitingResultFlag = Boolean(s.awaitingNewResult);
+    const nextTimeEl = document.getElementById('headerNextDrawTime');
+    if (nextTimeEl) {
+      nextTimeEl.textContent = `Giờ quay: ${s.expectedDrawTimeStr}`;
+    }
+    if (
+      !s.awaitingNewResult &&
+      (localCountdownSec <= 0 || Math.abs(localCountdownSec - s.secondsUntilNextSchedule) > 3)
+    ) {
+      localCountdownSec = s.secondsUntilNextSchedule;
+    }
+    renderCountdownUI();
   }
 }
 
@@ -103,9 +154,9 @@ function renderAll(state) {
   const latest = analysis.latestDraw;
   const latestBacktest = analysis.backtestHistory?.[0] || null;
 
-  // Build map of numbers predicted across all tiers in the latest backtest
+  // Build map of numbers predicted across all tiers in the matching backtest draw
   const predTiersMap = new Map();
-  if (latestBacktest) {
+  if (latest && latestBacktest && latestBacktest.drawId === latest.drawId) {
     const addNums = (tierObj, label) => {
       for (const num of tierObj?.predicted || []) {
         if (!predTiersMap.has(num)) predTiersMap.set(num, []);
@@ -145,12 +196,17 @@ function renderAll(state) {
     const hitBanner = document.getElementById('latestHitBanner');
     if (latestBacktest && latestBacktest.drawId === latest.drawId) {
       const b2 = latestBacktest.bac2;
+      const t4 = latestBacktest.top4Pairs;
       const b3 = latestBacktest.bac3;
       const b4 = latestBacktest.bac4;
       const b5 = latestBacktest.bac5;
-      const totalPrize = (b2.prize || 0) + (b3.prize || 0) + (b4.prize || 0) + (b5.prize || 0);
+      const singlePrize = (b2.prize || 0) + (b3.prize || 0) + (b4.prize || 0) + (b5.prize || 0);
+      const t4Prize = t4?.prize || 0;
 
-      const chipB2 = `<span class="${b2.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 2: <strong>${b2.hitCount}/2</strong>${b2.prize > 0 ? ' 🏆' : ''}</span>`;
+      const chipB2 = `<span class="${b2.prize > 0 ? 'prize-win' : 'stat-pill'}">VIP #1: <strong>${b2.hitCount}/2</strong>${b2.prize > 0 ? ' 🏆' : ''}</span>`;
+      const chipT4 = t4
+        ? `<span class="${t4.wonAny ? 'prize-win' : 'stat-pill'}">Dàn 4 cặp: <strong>${t4.winCount}/4 nổ</strong>${t4.wonAny ? ' 🏆' : ''}</span>`
+        : '';
       const chipB3 = `<span class="${b3.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 3: <strong>${b3.hitCount}/3</strong>${b3.prize > 0 ? ' 🏆' : ''}</span>`;
       const chipB4 = `<span class="${b4.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 4: <strong>${b4.hitCount}/4</strong>${b4.prize > 0 ? ' 🏆' : ''}</span>`;
       const chipB5 = `<span class="${b5.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 5: <strong>${b5.hitCount}/5</strong>${b5.prize > 0 ? ' 🏆' : ''}</span>`;
@@ -159,11 +215,11 @@ function renderAll(state) {
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:100%;">
           <span>🎯 Đối soát kỳ <strong>#${latest.drawId}</strong> (Mẫu: <strong>${latestBacktest.sampleSizeUsed || analysis.totalHistoricalDraws - 1} kỳ</strong>):</span>
           <div style="display:inline-flex;gap:6px;flex-wrap:wrap;">
-            ${chipB2} ${chipB3} ${chipB4} ${chipB5}
+            ${chipB2} ${chipT4} ${chipB3} ${chipB4} ${chipB5}
           </div>
           ${
-            totalPrize > 0
-              ? `<span class="prize-win" style="margin-left:auto;">🏆 Ăn thưởng: +${formatVnd(totalPrize)}</span>`
+            t4Prize > 0 || singlePrize > 0
+              ? `<span class="prize-win" style="margin-left:auto;">🏆 ${t4Prize > 0 ? `Dàn 4 cặp +${formatVnd(t4Prize)}` : ''}${t4Prize > 0 && singlePrize > 0 ? ' · ' : ''}${singlePrize > 0 ? `Đơn +${formatVnd(singlePrize)}` : ''}</span>`
               : `<span style="color:#94a3b8;margin-left:auto;">Đã tích lũy thành <strong>${analysis.totalHistoricalDraws} kỳ</strong></span>`
           }
         </div>
@@ -277,28 +333,28 @@ function renderAll(state) {
   const acc = analysis.modelAccuracy;
   const weightModels = [
     {
-      name: '🔥 Tần Suất Lũy Tiến Toàn Mẫu (Expanding Frequency - Ưu tiên số hay ra)',
-      weight: Math.round(w.freq * 100),
-      acc: acc.freq,
-      desc: `Tập trung vào nhóm các con số có tần suất xuất hiện nhiều nhất trên toàn bộ ${analysis.totalHistoricalDraws} kỳ`
-    },
-    {
-      name: '⚡ Phong Độ 10 Kỳ Gần Nhất (Recent Hot Momentum)',
-      weight: Math.round(w.momentum10 * 100),
-      acc: acc.momentum10,
-      desc: 'Bắt nhịp các con số đang có phong độ cao, nổ đều đặn trong 10 kỳ quay gần đây'
-    },
-    {
-      name: '🔗 Ma Trận Kéo Theo Markov (Conditional Transitions)',
+      name: '🔗 Ma Trận Chuyển Tiếp Shrunk Markov (Alpha=60 LLR)',
       weight: Math.round(w.markov * 100),
       acc: acc.markov,
-      desc: 'Tính lực kéo chuyển tiếp trực tiếp từ 20 con số vừa nổ ở kỳ gần nhất'
+      desc: 'Tính lực kéo điều kiện từ 20 số kỳ trước với làm mượt Bayesian về nền 25%'
     },
     {
-      name: '⏳ Điểm Rơi Chu Kỳ & Nhịp Rơi (Cycle Rhythms & Gaps)',
+      name: '🔥 Tần Suất Lũy Tiến Empirical-Bayes (Expanding Freq)',
+      weight: Math.round(w.freq * 100),
+      acc: acc.freq,
+      desc: `Đo log-odds xuất hiện của từng số trên toàn bộ ${analysis.totalHistoricalDraws} kỳ lịch sử`
+    },
+    {
+      name: '⚡ Phong Độ Mượt EWMA (HL=12 & HL=28 kỳ)',
+      weight: Math.round(((w.momentum10 || 0) + (w.momentum20 || 0)) * 100),
+      acc: acc.momentum10,
+      desc: 'Trung bình hàm mũ đa khung thời gian tránh nhiễu gãy đoạn khi thay đổi cửa sổ'
+    },
+    {
+      name: '⏳ Nhịp Rơi & Chống Kiệt Sức (Calibrated Cycle Z)',
       weight: Math.round(w.cycle * 100),
       acc: acc.cycle,
-      desc: 'Bắt nhịp rơi cách 0-4 kỳ và chu kỳ xuất hiện của các con số hay về'
+      desc: 'Hiệu chuẩn thang Z-score cho nhịp rơi 0–1 kỳ, chu kỳ 7–8 kỳ và phạt bệt >= 4 kỳ'
     }
   ];
 
@@ -311,7 +367,7 @@ function renderAll(state) {
           <span style="color:#38bdf8;">Trọng số: ${m.weight}% <small style="color:#94a3b8;">(Tỷ lệ trúng: ${m.acc}%)</small></span>
         </div>
         <div class="weight-bar-bg">
-          <div class="weight-bar-fill" style="width: ${Math.min(100, m.weight * 2)}%"></div>
+          <div class="weight-bar-fill" style="width: ${Math.min(100, Math.max(4, m.weight))}%"></div>
         </div>
         <div class="weight-sub">${m.desc}</div>
       </div>
@@ -336,17 +392,17 @@ function renderAll(state) {
     .map(
       (item, idx) => `
       <tr>
-        <td><strong>#${idx + 1}</strong></td>
-        <td><span class="mini-ball hit">${pad2(item.number)}</span></td>
-        <td><strong style="color:#38bdf8;">${item.totalScore}</strong></td>
-        <td><span style="color:#34d399;font-weight:700;">${item.confidence}%</span></td>
-        <td>${item.countAll}/${analysis.totalHistoricalDraws}k <small style="color:#64748b;">(${item.count10}/10k)</small></td>
-        <td>${
+        <td class="t12-rank" data-label="Hạng"><strong>#${idx + 1}</strong></td>
+        <td class="t12-num" data-label="Số"><span class="mini-ball hit">${pad2(item.number)}</span></td>
+        <td class="t12-score" data-label="Điểm Tổng"><strong style="color:#38bdf8;">${item.totalScore}</strong></td>
+        <td class="t12-conf" data-label="Tin Cậy"><span style="color:#34d399;font-weight:700;">${item.confidence}%</span></td>
+        <td class="t12-freq" data-label="Tần Suất">${item.countAll}/${analysis.totalHistoricalDraws}k <small style="color:#64748b;">(${item.count10}/10k)</small></td>
+        <td class="t12-gap" data-label="Chu Kỳ / Gan">${
           item.gap === 0
             ? `<span style="color:#fbbf24;font-weight:700;">Bệt ${item.streak} kỳ</span>`
             : `Cách ${item.gap} kỳ`
         }</td>
-        <td>
+        <td class="t12-status" data-label="Phong Độ">
           <span class="sat-tag ${item.statusType || 'optimal'}">${item.statusNote || 'Số hay ra'}</span>
         </td>
       </tr>
@@ -397,18 +453,28 @@ function renderAll(state) {
   // 9. Walk-Forward Backtest Table
   const btSum = analysis.backtestSummary || {};
   const evalCount = btSum.evaluatedDraws || 1;
+  const theo = btSum.theoretical || {};
   const b2Rate = btSum.bac2WinRate !== undefined ? btSum.bac2WinRate : ((btSum.bac2WinCount || 0) / evalCount * 100).toFixed(1);
   const b3Rate = btSum.bac3WinRate !== undefined ? btSum.bac3WinRate : ((btSum.bac3WinCount || 0) / evalCount * 100).toFixed(1);
   const b4Rate = btSum.bac4WinRate !== undefined ? btSum.bac4WinRate : ((btSum.bac4WinCount || 0) / evalCount * 100).toFixed(1);
   const b5Rate = btSum.bac5WinRate !== undefined ? btSum.bac5WinRate : ((btSum.bac5WinCount || 0) / evalCount * 100).toFixed(1);
+  const t4Rate = btSum.top4AnyWinRate ?? 0;
+  const l100 = btSum.last100;
+
+  const rtpColor = (rtp) => (rtp >= 100 ? '#34d399' : rtp >= 70 ? '#38bdf8' : '#fbbf24');
 
   document.getElementById('backtestSummaryBadges').innerHTML = `
     <span class="bt-badge">Kiểm chứng: <strong>${btSum.evaluatedDraws || 0} kỳ</strong></span>
-    <span class="bt-badge">Bậc 2 trúng: <strong>${btSum.bac2WinCount || 0} kỳ</strong> (${b2Rate}% · x9)</span>
-    <span class="bt-badge">Bậc 3 trúng: <strong>${btSum.bac3WinCount || 0} kỳ</strong> (${b3Rate}%)</span>
-    <span class="bt-badge">Bậc 4 trúng: <strong>${btSum.bac4WinCount || 0} kỳ</strong> (${b4Rate}%)</span>
-    <span class="bt-badge">Bậc 5 trúng: <strong>${btSum.bac5WinCount || 0} kỳ</strong> (${b5Rate}%)</span>
-    <span class="bt-badge" style="background:rgba(56,189,248,0.15);color:#38bdf8;border-color:rgba(56,189,248,0.3);">TB bóng trúng: <strong>${btSum.avgTop5HitRate || 0}%</strong></span>
+    <span class="bt-badge">VIP #1 (B2): <strong>${btSum.bac2WinCount || 0}</strong> (${b2Rate}% · <span style="color:${rtpColor(btSum.bac2Rtp || 0)}">RTP ${btSum.bac2Rtp ?? '--'}%</span> <small style="opacity:0.75">/ LT ${theo.bac2Rtp ?? 54.1}%</small>)</span>
+    <span class="bt-badge" style="background:rgba(56,189,248,0.16);color:#38bdf8;border-color:rgba(56,189,248,0.35);">Dàn 4 Cặp Độc Lập: <strong>${btSum.top4AnyWinCount || 0} kỳ nổ</strong> (${t4Rate}% <small style="opacity:0.75">/ LT ${theo.top4DisjointAnyWinRate ?? 22.3}%</small> · <span style="color:${rtpColor(btSum.top4Rtp || 0)}">RTP ${btSum.top4Rtp ?? '--'}%</span> <small style="opacity:0.75">/ LT ${theo.top4DisjointRtp ?? 54.1}%</small>)</span>
+    ${
+      l100
+        ? `<span class="bt-badge" style="background:rgba(245,158,11,0.14);color:#fde68a;border-color:rgba(245,158,11,0.35);">${l100.evaluatedDraws} kỳ gần nhất: VIP#1 <strong>${l100.bac2WinRate}%</strong> (RTP ${l100.bac2Rtp}%) · Dàn 4 cặp <strong>${l100.top4AnyWinRate}%</strong> (RTP ${l100.top4Rtp}%)</span>`
+        : ''
+    }
+    <span class="bt-badge">Bậc 3: <strong>${b3Rate}%</strong> (RTP ${btSum.bac3Rtp ?? '--'}%)</span>
+    <span class="bt-badge">Bậc 4: <strong>${b4Rate}%</strong> (RTP ${btSum.bac4Rtp ?? '--'}%)</span>
+    <span class="bt-badge">Bậc 5: <strong>${b5Rate}%</strong> (RTP ${btSum.bac5Rtp ?? '--'}%)</span>
   `;
 
   const renderTierCell = (tierObj) => {
@@ -420,9 +486,31 @@ function renderAll(state) {
     const hitLabel = `Trúng ${tierObj.hitCount}/${tierObj.predicted.length}`;
     const color = isWin ? '#34d399' : (tierObj.hitCount > 0 ? '#38bdf8' : '#64748b');
     return `
-      <div>${balls}</div>
+      <div class="tier-cell-balls">${balls}</div>
       <div style="font-size:10.5px;color:${color};font-weight:${isWin ? '700' : '500'};margin-top:2px;">
         ${isWin ? `🏆 ${hitLabel} (+${formatVnd(tierObj.prize)})` : hitLabel}
+      </div>
+    `;
+  };
+
+  const renderTop4Cell = (t4Obj) => {
+    if (!t4Obj || !t4Obj.pairs) return '<span style="color:#64748b">--</span>';
+    const pairTags = t4Obj.pairs
+      .map((p) => {
+        const hSet = new Set(p.hits || []);
+        const cls = p.won ? 'border:1px solid #10b981;background:rgba(16,185,129,0.18);' : 'border:1px solid #23314d;background:#0f172a;';
+        const numsHtml = p.numbers
+          .map((n) => `<span class="mini-ball ${hSet.has(n) ? 'hit' : ''}" style="width:21px;height:21px;font-size:10.5px;">${pad2(n)}</span>`)
+          .join('');
+        return `<span style="display:inline-flex;align-items:center;gap:2px;padding:2px 4px;border-radius:6px;${cls}">${numsHtml}</span>`;
+      })
+      .join(' ');
+    const isWin = t4Obj.wonAny;
+    const color = isWin ? '#34d399' : '#64748b';
+    return `
+      <div class="top4-pairs-wrap">${pairTags}</div>
+      <div style="font-size:10.5px;color:${color};font-weight:${isWin ? '700' : '500'};margin-top:3px;">
+        ${isWin ? `🏆 Nổ ${t4Obj.winCount}/4 cặp (+${formatVnd(t4Obj.prize)})` : '0/4 cặp nổ'}
       </div>
     `;
   };
@@ -430,7 +518,8 @@ function renderAll(state) {
   document.getElementById('backtestTableBody').innerHTML = (analysis.backtestHistory || [])
     .map((row) => {
       const prizes = [];
-      if (row.bac2.prize > 0) prizes.push(`Bậc 2: +${formatVnd(row.bac2.prize)}`);
+      if (row.top4Pairs?.prize > 0) prizes.push(`Dàn 4 cặp (${row.top4Pairs.winCount}/4): +${formatVnd(row.top4Pairs.prize)}`);
+      if (row.bac2.prize > 0) prizes.push(`VIP #1: +${formatVnd(row.bac2.prize)}`);
       if (row.bac3.prize > 0) prizes.push(`Bậc 3: +${formatVnd(row.bac3.prize)}`);
       if (row.bac4.prize > 0) prizes.push(`Bậc 4: +${formatVnd(row.bac4.prize)}`);
       if (row.bac5.prize > 0) prizes.push(`Bậc 5: +${formatVnd(row.bac5.prize)}`);
@@ -448,20 +537,23 @@ function renderAll(state) {
 
       return `
         <tr>
-          <td>
+          <td class="bt-draw" data-label="Kỳ Quay">
             <strong>#${row.drawId}</strong>
-            <div style="font-size:11px;color:#64748b;">${row.time}</div>
-            ${
-              row.sampleSizeUsed
-                ? `<div style="font-size:10.5px;color:#38bdf8;font-weight:600;">Mẫu: ${row.sampleSizeUsed} kỳ</div>`
-                : ''
-            }
+            <div class="bt-draw-meta">
+              <div style="font-size:11px;color:#64748b;">${row.time}</div>
+              ${
+                row.sampleSizeUsed
+                  ? `<div style="font-size:10.5px;color:#38bdf8;font-weight:600;">Mẫu: ${row.sampleSizeUsed} kỳ</div>`
+                  : ''
+              }
+            </div>
           </td>
-          <td>${renderTierCell(row.bac2)}</td>
-          <td>${renderTierCell(row.bac3)}</td>
-          <td>${renderTierCell(row.bac4)}</td>
-          <td>${renderTierCell(row.bac5)}</td>
-          <td>${resultCell}</td>
+          <td class="bt-bac2" data-label="Bậc 2 (VIP #1)">${renderTierCell(row.bac2)}</td>
+          <td class="bt-top4" data-label="Dàn 4 Cặp Độc Lập">${renderTop4Cell(row.top4Pairs)}</td>
+          <td class="bt-bac3" data-label="Bậc 3">${renderTierCell(row.bac3)}</td>
+          <td class="bt-bac4" data-label="Bậc 4">${renderTierCell(row.bac4)}</td>
+          <td class="bt-bac5" data-label="Bậc 5">${renderTierCell(row.bac5)}</td>
+          <td class="bt-result" data-label="Kết Quả Đối Soát">${resultCell}</td>
         </tr>
       `;
     })
@@ -472,15 +564,15 @@ function renderAll(state) {
     .map(
       (d) => `
       <tr>
-        <td><strong>#${d.drawId}</strong></td>
-        <td>
+        <td class="hist-draw" data-label="Kỳ"><strong>#${d.drawId}</strong></td>
+        <td class="hist-time" data-label="Giờ">
           <div><strong>${d.time}</strong></div>
           <div style="font-size:10.5px;color:#64748b;">${d.date}</div>
         </td>
-        <td>
+        <td class="hist-balls" data-label="20 Số Kết Quả">
           ${d.numbers.map((n) => `<span class="mini-ball">${pad2(n)}</span>`).join('')}
         </td>
-        <td>
+        <td class="hist-meta" data-label="Chẵn/Lẻ · Lớn/Nhỏ">
           <div style="font-size:11.5px;color:#38bdf8;">${d.parityLabel}</div>
           <div style="font-size:11.5px;color:#fb923c;">${d.sizeLabel}</div>
         </td>
@@ -538,12 +630,12 @@ setInterval(() => {
 
 // Event Listeners
 document.getElementById('btnRefreshNow')?.addEventListener('click', async () => {
+  unlockAudioContext();
   const btn = document.getElementById('btnRefreshNow');
   btn.disabled = true;
   btn.textContent = '⏳ Đang quét...';
   try {
-    const res = await fetch('/api/refresh', { method: 'POST' });
-    const data = await res.json();
+    const data = await fetchJson('/api/refresh', { method: 'POST' });
     renderAll(data);
     if (data.refreshResult?.added > 0) {
       showToast(`✅ Đã cập nhật thêm ${data.refreshResult.added} kỳ quay mới!`);
@@ -560,25 +652,28 @@ document.getElementById('btnRefreshNow')?.addEventListener('click', async () => 
 
 document.getElementById('btnSoundToggle')?.addEventListener('click', () => {
   soundEnabled = !soundEnabled;
+  if (soundEnabled) unlockAudioContext();
   const btn = document.getElementById('btnSoundToggle');
   btn.textContent = soundEnabled ? '🔔 Âm báo: BẬT' : '🔕 Âm báo: TẮT';
 });
 
 document.getElementById('btnExpandHistory')?.addEventListener('click', async () => {
+  unlockAudioContext();
   const btn = document.getElementById('btnExpandHistory');
   btn.disabled = true;
   btn.textContent = '⏳ Đang nạp sâu...';
   try {
-    const res = await fetch('/api/expand-history?pages=10', { method: 'POST' });
-    const data = await res.json();
+    const data = await fetchJson('/api/expand-history?days=2&pages=7', { method: 'POST' });
     renderAll(data);
     const total = data.analysis?.totalHistoricalDraws || data.refreshResult?.totalSample || '--';
     if (data.refreshResult?.added > 0) {
       showToast(
-        `📈 Đã nạp thêm <strong>${data.refreshResult.added} kỳ</strong> lịch sử! Tổng mẫu tính toán hiện tại: <strong>${total} kỳ</strong>.`
+        `📈 Đã nạp thêm <strong>${data.refreshResult.added} kỳ</strong> cũ! Tổng mẫu tính toán hiện tại: <strong>${total} kỳ</strong>.`
       );
+    } else if (data.refreshResult?.limitReached) {
+      showToast(`ℹ️ Đã đạt giới hạn bộ nhớ tối đa (<strong>${total} kỳ</strong>).`);
     } else {
-      showToast(`ℹ️ Đã nạp tối đa nguồn lịch sử hiện có (Tổng mẫu: <strong>${total} kỳ</strong>).`);
+      showToast(`ℹ️ Không còn kỳ cũ hơn khả dụng từ nguồn (Tổng mẫu: <strong>${total} kỳ</strong>).`);
     }
   } catch (err) {
     showToast(`⚠️ Lỗi khi mở rộng mẫu: ${err.message}`);
@@ -589,13 +684,19 @@ document.getElementById('btnExpandHistory')?.addEventListener('click', async () 
 });
 
 document.getElementById('strategySelect')?.addEventListener('change', async (e) => {
-  const mode = e.target.value;
+  const selectEl = e.target;
+  const mode = selectEl.value;
+  const prevMode = appState?.analysis?.mode;
+  selectEl.disabled = true;
   try {
-    const res = await fetch(`/api/state?mode=${encodeURIComponent(mode)}`);
-    const data = await res.json();
+    const data = await fetchJson(`/api/state?mode=${encodeURIComponent(mode)}`);
     renderAll(data);
   } catch (err) {
     console.error('Failed to switch strategy mode:', err);
+    if (prevMode) selectEl.value = prevMode;
+    showToast(`⚠️ Không thể đổi chiến lược: ${err.message}`);
+  } finally {
+    selectEl.disabled = false;
   }
 });
 

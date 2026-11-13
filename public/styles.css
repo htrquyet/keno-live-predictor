@@ -20,12 +20,19 @@
   padding: 0;
 }
 
+html {
+  overflow-x: clip;
+  max-width: 100%;
+}
+
 body {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   background-color: var(--bg-main);
   color: var(--text-main);
   line-height: 1.45;
   min-height: 100vh;
+  overflow-x: clip;
+  max-width: 100%;
 }
 
 /* Header */
@@ -243,11 +250,17 @@ body {
   gap: 20px;
 }
 
+.grid-two-col > *,
+.grid-three-col > *,
+.grid-two-col-bottom > * {
+  min-width: 0;
+}
+
 @media (max-width: 1280px) {
   .grid-two-col,
   .grid-three-col,
   .grid-two-col-bottom {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -260,6 +273,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
 }
 
@@ -401,7 +415,8 @@ body {
 
 .board-legend {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 6px 12px;
   font-size: 11.5px;
   color: var(--text-muted);
 }
@@ -449,11 +464,13 @@ body {
   position: relative;
 }
 
-.cell-80:hover {
-  transform: scale(1.12);
-  z-index: 5;
-  border-color: #94a3b8;
-  color: #fff;
+@media (hover: hover) {
+  .cell-80:hover {
+    transform: scale(1.12);
+    z-index: 5;
+    border-color: #94a3b8;
+    color: #fff;
+  }
 }
 
 .cell-80.is-drawn {
@@ -669,7 +686,8 @@ body {
   border: 1px solid rgba(56, 189, 248, 0.4);
 }
 
-.pair-status-tag.due {
+.pair-status-tag.due,
+.pair-status-tag.optimal {
   background: rgba(52, 211, 153, 0.15);
   color: #34d399;
   border: 1px solid rgba(52, 211, 153, 0.35);
@@ -982,6 +1000,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  pointer-events: none;
 }
 
 .toast {
@@ -994,10 +1013,498 @@ body {
   font-size: 13.5px;
   font-weight: 600;
   animation: slideIn 0.25s ease;
+  pointer-events: auto;
 }
 
 @keyframes slideIn {
   from { transform: translateY(20px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* Tier & Top-4 Table Cell Helpers */
+.tier-cell-balls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.tier-cell-balls .mini-ball {
+  margin: 0;
+}
+
+.top4-pairs-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 240px;
+}
+
+/* Tablet & Small Laptop Adjustments */
+@media (max-width: 1024px) {
+  .app-header {
+    padding: 12px 18px;
+    gap: 12px;
+  }
+
+  .dashboard-container {
+    padding: 16px;
+    gap: 16px;
+  }
+}
+
+/* Mobile Layout (Phones <= 768px) */
+@media (max-width: 768px) {
+  .app-header {
+    position: static;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px 14px;
+    gap: 10px;
+  }
+
+  .header-left {
+    gap: 10px;
+  }
+
+  .brand-logo {
+    width: 40px;
+    height: 40px;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+
+  .app-title {
+    font-size: 15.5px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .app-subtitle {
+    font-size: 11.5px;
+  }
+
+  .header-center {
+    width: 100%;
+  }
+
+  .countdown-box {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 12px;
+  }
+
+  .countdown-timer {
+    font-size: 22px;
+    min-width: 82px;
+    padding: 4px 10px;
+  }
+
+  .countdown-status {
+    max-width: none;
+    flex: 1 1 100%;
+    font-size: 11px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .header-right {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .live-status-pill {
+    justify-content: center;
+    font-size: 11.5px;
+    padding: 6px 10px;
+  }
+
+  .header-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .header-actions .btn-primary {
+    grid-column: 1 / -1;
+  }
+
+  .btn-primary,
+  .btn-secondary {
+    min-height: 40px;
+    padding: 9px 10px;
+    font-size: 12.5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .dashboard-container {
+    padding: 12px;
+    gap: 14px;
+  }
+
+  .card {
+    padding: 14px;
+    gap: 12px;
+    border-radius: 12px;
+  }
+
+  .card-header {
+    gap: 10px;
+    padding-bottom: 10px;
+  }
+
+  .card-title {
+    font-size: 14.5px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .card-sub {
+    font-size: 11.5px;
+  }
+
+  .strategy-selector {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 5px;
+  }
+
+  .select-input {
+    width: 100%;
+    min-height: 40px;
+    font-size: 13px;
+  }
+
+  .latest-balls-wrapper {
+    padding: 10px;
+  }
+
+  .board80-grid {
+    gap: 4px;
+    padding: 8px;
+  }
+
+  .cell-80 {
+    height: 30px;
+    font-size: 11.5px;
+    border-radius: 5px;
+  }
+
+  .tier-top {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .backtest-summary-badges {
+    gap: 6px;
+  }
+
+  .bt-badge {
+    font-size: 11px;
+    padding: 4px 8px;
+    line-height: 1.35;
+  }
+
+  .top4-pairs-wrap {
+    max-width: none;
+    gap: 6px;
+  }
+
+  /* Responsive Card Layouts for Wide Data Tables */
+  .table-scroll {
+    max-height: 540px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 2px;
+  }
+
+  .table-backtest thead,
+  .table-top12 thead,
+  .table-history thead {
+    display: none;
+  }
+
+  .table-backtest tbody,
+  .table-top12 tbody,
+  .table-history tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .table-backtest tr:hover td,
+  .table-top12 tr:hover td,
+  .table-history tr:hover td {
+    background: transparent;
+  }
+
+  .table-backtest td,
+  .table-top12 td,
+  .table-history td {
+    border-bottom: none;
+    padding: 0;
+  }
+
+  .table-backtest tbody tr,
+  .table-top12 tbody tr,
+  .table-history tbody tr {
+    background: #0f172a;
+    border: 1px solid #22304d;
+    border-radius: 10px;
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+
+  .table-backtest tbody tr:last-child,
+  .table-top12 tbody tr:last-child,
+  .table-history tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  /* 1) Backtest Table Cards */
+  .table-backtest tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .table-backtest td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #94a3b8;
+    margin-bottom: 4px;
+  }
+
+  .table-backtest td.bt-draw {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .table-backtest td.bt-draw::before {
+    display: none;
+  }
+
+  .table-backtest td.bt-draw strong {
+    font-size: 14px;
+    color: #fbbf24;
+  }
+
+  .bt-draw-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .table-backtest td.bt-top4 {
+    grid-column: 1 / -1;
+    background: rgba(16, 185, 129, 0.05);
+    border: 1px solid rgba(52, 211, 153, 0.16);
+    border-radius: 8px;
+    padding: 8px;
+  }
+
+  .table-backtest td.bt-bac2,
+  .table-backtest td.bt-bac3,
+  .table-backtest td.bt-bac4,
+  .table-backtest td.bt-bac5 {
+    background: #131c31;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 7px 8px;
+    min-width: 0;
+  }
+
+  .table-backtest td.bt-result {
+    grid-column: 1 / -1;
+    border-top: 1px dashed #24324d;
+    padding-top: 8px;
+    margin-top: 2px;
+  }
+
+  /* 2) Top 12 Ranked Numbers Cards */
+  .table-top12 tbody tr {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px 6px;
+  }
+
+  .table-top12 td.t12-rank,
+  .table-top12 td.t12-num,
+  .table-top12 td.t12-status {
+    display: flex;
+    align-items: center;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .table-top12 td.t12-rank {
+    grid-column: 1 / 2;
+    font-size: 13.5px;
+  }
+
+  .table-top12 td.t12-num {
+    grid-column: 2 / 3;
+  }
+
+  .table-top12 td.t12-status {
+    grid-column: 3 / 7;
+    justify-content: flex-end;
+    text-align: right;
+  }
+
+  .table-top12 td.t12-score,
+  .table-top12 td.t12-conf,
+  .table-top12 td.t12-freq,
+  .table-top12 td.t12-gap {
+    background: #131c31;
+    border: 1px solid #1e293b;
+    border-radius: 7px;
+    padding: 6px 8px;
+    min-width: 0;
+  }
+
+  .table-top12 td.t12-score { grid-column: 1 / 4; }
+  .table-top12 td.t12-conf  { grid-column: 4 / 7; }
+  .table-top12 td.t12-freq  { grid-column: 1 / 4; }
+  .table-top12 td.t12-gap   { grid-column: 4 / 7; }
+
+  .table-top12 td.t12-score::before,
+  .table-top12 td.t12-conf::before,
+  .table-top12 td.t12-freq::before,
+  .table-top12 td.t12-gap::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #94a3b8;
+    margin-bottom: 2px;
+  }
+
+  /* 3) Recent History Cards */
+  .table-history tbody tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .table-history td.hist-draw {
+    font-size: 14px;
+    color: #fbbf24;
+  }
+
+  .table-history td.hist-time {
+    text-align: right;
+    font-size: 12px;
+  }
+
+  .table-history td.hist-balls {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .table-history td.hist-balls .mini-ball {
+    margin: 0;
+  }
+
+  .table-history td.hist-meta {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  .parity-size-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .keno-ball {
+    width: 34px;
+    height: 34px;
+    font-size: 13px;
+  }
+
+  .pred-ball {
+    width: 34px;
+    height: 34px;
+    font-size: 13.5px;
+  }
+
+  .toast-container {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .toast {
+    font-size: 12.5px;
+    padding: 11px 14px;
+  }
+}
+
+@media (max-width: 480px) {
+  .zones-bars {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .pairs-grid {
+    gap: 8px;
+  }
+
+  .pair-ball {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+
+  .board80-grid {
+    gap: 3px;
+    padding: 6px;
+  }
+
+  .cell-80 {
+    height: 27px;
+    font-size: 11px;
+  }
+
+  .table-backtest .tier-cell-balls {
+    gap: 2px;
+  }
+
+  .table-backtest .tier-cell-balls .mini-ball {
+    width: 21px;
+    height: 21px;
+    font-size: 10px;
+  }
+}
+
 

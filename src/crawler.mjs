@@ -97,21 +97,66 @@ export function normalizeDraw(rawId, time, date, numbers, source = 'live') {
   };
 }
 
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+/**
+ * Reliable Vietnam timezone (UTC+7) calendar & clock components
+ */
+export function getVnNowParts(nowDate = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(nowDate);
+
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+
+  const hours = parseInt(map.hour, 10) % 24;
+  const minutes = parseInt(map.minute, 10);
+  const seconds = parseInt(map.second, 10);
+
+  return {
+    day: parseInt(map.day, 10),
+    month: parseInt(map.month, 10),
+    year: parseInt(map.year, 10),
+    hours,
+    minutes,
+    seconds,
+    dateSlash: `${map.day}/${map.month}/${map.year}`,
+    dateDash: `${map.day}-${map.month}-${map.year}`
+  };
+}
+
 /**
  * Helper to get date string in DD-MM-YYYY format for Vietnam timezone (UTC+7)
  */
 export function getVnDateStr(offsetDays = 0) {
-  const d = new Date();
-  if (offsetDays !== 0) {
-    d.setDate(d.getDate() - offsetDays);
-  }
-  const dateStr = d.toLocaleDateString('vi-VN', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  }); // returns DD/MM/YYYY
-  return dateStr.replace(/\//g, '-');
+  const vn = getVnNowParts();
+  const utc = new Date(Date.UTC(vn.year, vn.month - 1, vn.day - offsetDays));
+  return `${pad2(utc.getUTCDate())}-${pad2(utc.getUTCMonth() + 1)}-${utc.getUTCFullYear()}`;
+}
+
+function parseSlashDateToUtcMs(dateSlashStr) {
+  if (!dateSlashStr || typeof dateSlashStr !== 'string') return null;
+  const m = dateSlashStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const dd = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  const yyyy = parseInt(m[3], 10);
+  return Date.UTC(yyyy, mm - 1, dd);
+}
+
+function formatUtcMsToDash(utcMs) {
+  const d = new Date(utcMs);
+  return `${pad2(d.getUTCDate())}-${pad2(d.getUTCMonth() + 1)}-${d.getUTCFullYear()}`;
 }
 
 /**
@@ -216,6 +261,56 @@ export async function fetchInitialHistory(pagesPerDay = 6) {
 }
 
 /**
+ * Fetch older historical days strictly earlier than the current oldest stored draw
+ */
+export async function fetchOlderHistoryDraws(oldestDraw = null, daysToFetch = 2, pagesPerDay = 7) {
+  const map = new Map();
+  const vn = getVnNowParts();
+  const todayUtcMs = Date.UTC(vn.year, vn.month - 1, vn.day);
+  const parsedOldestMs = oldestDraw ? parseSlashDateToUtcMs(oldestDraw.date) : null;
+  const anchorUtcMs = parsedOldestMs ?? todayUtcMs;
+
+  // If the oldest draw is already the opening draw (06:08) of that day, step straight to prior days
+  const hasOpeningDraw = oldestDraw && oldestDraw.time === '06:08';
+  const startStep = parsedOldestMs !== null ? (hasOpeningDraw ? 1 : 0) : 3;
+
+  const dates = [];
+  for (let i = 0; i < daysToFetch; i++) {
+    const dayMs = anchorUtcMs - (startStep + i) * 86400000;
+    dates.push(formatUtcMsToDash(dayMs));
+  }
+
+  for (const d of dates) {
+    let consecutiveEmpty = 0;
+    for (let p = 1; p <= pagesPerDay; p++) {
+      try {
+        const list = await fetchMinhChinhPage(p, d);
+        if (!list || list.length === 0) {
+          consecutiveEmpty++;
+          if (consecutiveEmpty >= 2) break;
+          continue;
+        }
+        consecutiveEmpty = 0;
+        let newCount = 0;
+        for (const item of list) {
+          if (!map.has(item.drawNumber)) {
+            map.set(item.drawNumber, item);
+            newCount++;
+          }
+        }
+        if (newCount === 0 && p > 2) {
+          break;
+        }
+      } catch (err) {
+        console.warn(`[Crawler] Warn fetching older page ${p} date ${d}:`, err.message);
+      }
+    }
+  }
+
+  return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+}
+
+/**
  * Backfill any missing draws between two IDs (self-healing)
  */
 export async function fetchMissingGapDraws(startDrawNumber, endDrawNumber) {
@@ -271,19 +366,15 @@ export async function fetchLatestDraws() {
 }
 
 /**
- * Compute next Keno draw schedule info (8-minute cycle from 06:00 to 21:52 Vietnam Time)
+ * Compute next Keno draw schedule info (8-minute cycle from 06:08 to 21:52 Vietnam Time)
  */
 export function getNextDrawSchedule(latestDraw = null) {
-  const now = new Date();
-  // Convert to Vietnam time (UTC+7)
-  const vnTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
-  const hours = vnTime.getHours();
-  const minutes = vnTime.getMinutes();
-  const seconds = vnTime.getSeconds();
+  const vn = getVnNowParts();
+  const { hours, minutes, seconds, dateSlash } = vn;
   const totalMinutes = hours * 60 + minutes;
 
-  const firstDrawMin = 6 * 60; // 06:00 (360)
-  const lastDrawMin = 21 * 60 + 52; // 21:52 (1312)
+  const firstDrawMin = 6 * 60 + 8; // 06:08 (368) - actual first Vietlott Keno draw of day
+  const lastDrawMin = 21 * 60 + 52; // 21:52 (1312) - actual final draw of day
 
   let nextDrawTotalMin;
   let isOperatingHours = true;
@@ -305,29 +396,42 @@ export function getNextDrawSchedule(latestDraw = null) {
 
   const nextHour = Math.floor((nextDrawTotalMin % (24 * 60)) / 60);
   const nextMin = nextDrawTotalMin % 60;
-  const nextTimeStr = `${String(nextHour).padStart(2, '0')}:${String(nextMin).padStart(2, '0')}`;
+  const nextTimeStr = `${pad2(nextHour)}:${pad2(nextMin)}`;
 
-  // Check if a draw just occurred on the clock (e.g. 11:44) but hasn't appeared in latestDraw yet
   let awaitingNewResult = false;
   let expectedDrawTimeStr = nextTimeStr;
-  let expectedDrawId = latestDraw ? String(latestDraw.drawNumber + 1) : '---';
+  const expectedDrawId = latestDraw ? String(latestDraw.drawNumber + 1) : '---';
 
-  if (latestDraw && isOperatingHours) {
-    const [latestH, latestM] = latestDraw.time.split(':').map((x) => parseInt(x, 10));
-    const latestTotalMin = latestH * 60 + latestM;
-    // Current most recent scheduled draw slot at or before totalMinutes
-    const currentSlotMin = totalMinutes - (totalMinutes % 8);
-    if (currentSlotMin > latestTotalMin && totalMinutes - latestTotalMin <= 60) {
+  // Grace window up to 21:57 so the 21:52 closing draw is caught after 21:52:00
+  const isPostCloseGrace = totalMinutes >= lastDrawMin && totalMinutes <= lastDrawMin + 5;
+
+  if (isOperatingHours || isPostCloseGrace) {
+    const isLatestToday = latestDraw && latestDraw.date === dateSlash;
+
+    if (isLatestToday) {
+      const [latestH, latestM] = (latestDraw.time || '').split(':').map((x) => parseInt(x, 10));
+      if (!Number.isNaN(latestH) && !Number.isNaN(latestM)) {
+        const latestTotalMin = latestH * 60 + latestM;
+        const currentSlotMin = totalMinutes >= lastDrawMin ? lastDrawMin : totalMinutes - (totalMinutes % 8);
+        if (
+          currentSlotMin >= firstDrawMin &&
+          currentSlotMin > latestTotalMin &&
+          currentSlotMin - latestTotalMin <= 60
+        ) {
+          awaitingNewResult = true;
+          const expMin = Math.min(lastDrawMin, latestTotalMin + 8);
+          expectedDrawTimeStr = `${pad2(Math.floor(expMin / 60))}:${pad2(expMin % 60)}`;
+        }
+      }
+    } else if (totalMinutes >= firstDrawMin && totalMinutes < firstDrawMin + 16) {
+      // Waiting for today's opening draw(s) starting 06:08 while latestDraw is from previous day
       awaitingNewResult = true;
-      const expMin = latestTotalMin + 8;
-      const expH = Math.floor(expMin / 60);
-      const expM = expMin % 60;
-      expectedDrawTimeStr = `${String(expH).padStart(2, '0')}:${String(expM).padStart(2, '0')}`;
+      expectedDrawTimeStr = '06:08';
     }
   }
 
   return {
-    nowTimeStr: `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`,
+    nowTimeStr: `${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`,
     nextDrawTimeStr: nextTimeStr,
     expectedDrawTimeStr,
     expectedDrawId,

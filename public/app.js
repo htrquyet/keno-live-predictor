@@ -124,10 +124,68 @@ function renderCountdownUI() {
   }
 }
 
+const LOCAL_DRAW_CACHE_KEY = 'keno_draws_cache_v1';
+
+function loadClientDrawCache() {
+  try {
+    const raw = localStorage.getItem(LOCAL_DRAW_CACHE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveClientDrawCache(incomingDraws) {
+  if (!Array.isArray(incomingDraws) || incomingDraws.length === 0) return;
+  try {
+    const existing = loadClientDrawCache();
+    const map = new Map();
+    for (const d of existing) {
+      if (d && d.drawNumber) map.set(d.drawNumber, d);
+    }
+    let changed = false;
+    for (const d of incomingDraws) {
+      if (d && d.drawNumber && !map.has(d.drawNumber)) {
+        map.set(d.drawNumber, d);
+        changed = true;
+      }
+    }
+    if (changed) {
+      const sorted = [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber).slice(-400);
+      localStorage.setItem(LOCAL_DRAW_CACHE_KEY, JSON.stringify(sorted));
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+async function syncCachedDrawsToServerIfNeeded(serverState) {
+  try {
+    const serverLatestNum = serverState?.analysis?.latestDraw?.drawNumber || 0;
+    const cached = loadClientDrawCache();
+    const newerDraws = cached.filter((d) => d && d.drawNumber > serverLatestNum);
+    if (newerDraws.length === 0) return;
+
+    const synced = await fetchJson('/api/client-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ draws: newerDraws })
+    });
+    if (synced && synced.syncAdded > 0) {
+      renderAll(synced);
+    }
+  } catch {
+    // Ignore background client-sync error
+  }
+}
+
 function renderAll(state) {
   appState = state;
-  const { schedule, analysis, recentDraws } = state;
+  const { schedule, analysis, recentDraws, syncDraws } = state;
   if (!analysis) return;
+  saveClientDrawCache(syncDraws || recentDraws || []);
 
   // Sync schedule & countdown
   localCountdownSec = schedule?.secondsUntilNextSchedule ?? 0;
@@ -336,7 +394,7 @@ function renderAll(state) {
       name: '🔥 Tần Suất Nổ Toàn Mẫu & Chống Loãng (Overall Hot Frequency)',
       weight: Math.round(w.freq * 100),
       acc: acc.freq,
-      desc: `Ưu tiên nhóm số nổ nhiều nhất trên ${analysis.totalHistoricalDraws} kỳ (tự động pha nhịp 120 kỳ khi mẫu > 400 kỳ)`
+      desc: `Ưu tiên nhóm số nổ nhiều nhất trên ${analysis.totalHistoricalDraws} kỳ (tự động pha nhịp 120 kỳ khi mẫu > 300 kỳ)`
     },
     {
       name: '⚡ Phong Độ Nóng 10 & 20 Kỳ Gần Nhất (Recent Hot Momentum)',
@@ -589,6 +647,7 @@ function connectLiveStream() {
   es.addEventListener('init', (e) => {
     const data = JSON.parse(e.data);
     renderAll(data);
+    syncCachedDrawsToServerIfNeeded(data);
   });
 
   es.addEventListener('state_update', (e) => {

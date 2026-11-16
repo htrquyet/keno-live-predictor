@@ -6,7 +6,7 @@
  * 1. ƯU TIÊN TUYỆT ĐỐI SỐ HAY RA / DỄ RA:
  *    - Toàn bộ thuật toán tập trung vào nhóm số có tần suất nổ cao nhất toàn mẫu và phong độ gần đây (10 kỳ & 20 kỳ).
  *    - Tuyệt đối giữ vững số đang nổ, cầu bệt (streak >= 2: 92đ) và nhịp rơi vàng 0–2 kỳ (88–92đ).
- *    - Tự động chống loãng tần suất khi mẫu tích lũy vượt quá 400 kỳ bằng cách pha trộn tần suất 120 kỳ gần nhất (f120).
+ *    - Tự động chống loãng tần suất khi mẫu tích lũy vượt quá 300 kỳ bằng cách pha trộn tần suất 120 kỳ gần nhất (f120).
  *    - Lọc kiệt sức khi bóng nổ quá dày (>= 4/5 kỳ gần nhất) và loại bỏ lô gan dài ngày.
  * 2. BẬC 2 & DÀN 4 CẶP SONG THỦ ĐỘC LẬP TỪ TOP 8 SỐ NÓNG:
  *    - Bậc 2 (VIP #1): Bộ đôi dẫn đầu bảng điểm tổng hợp [Top 1, Top 2].
@@ -72,15 +72,15 @@ function normalize80(rawArr) {
 }
 
 /**
- * Compute effective frequency blending 120-draw window when totalDraws > 400 to prevent long-sample dilution
+ * Compute effective frequency blending 120-draw window when totalDraws > 300 to prevent long-sample dilution
  */
 function computeEffectiveFreq(countAllVal, count120Val, totalDraws) {
   const fBase = countAllVal / totalDraws;
-  if (totalDraws <= 400) {
+  if (totalDraws <= 300) {
     return fBase;
   }
   const f120 = count120Val / Math.min(120, totalDraws);
-  const alpha = Math.min(0.65, ((totalDraws - 400) / 200) * 0.65);
+  const alpha = Math.min(0.65, ((totalDraws - 300) / 180) * 0.65);
   return alpha * f120 + (1 - alpha) * fBase;
 }
 

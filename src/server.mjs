@@ -7,7 +7,8 @@ import {
   fetchLatestDraws,
   fetchMissingGapDraws,
   fetchOlderHistoryDraws,
-  getNextDrawSchedule
+  getNextDrawSchedule,
+  normalizeDraw
 } from './crawler.mjs';
 import { analyzeAndPredictNextDraw } from './predictor.mjs';
 
@@ -26,6 +27,7 @@ const drawMap = new Map();
 let currentMode = 'adaptive';
 let cachedAnalysis = null;
 let lastPollTime = null;
+let lastPollCompletedMs = 0;
 let lastPollStatus = 'Khởi động...';
 let isPolling = false;
 let activePollPromise = null;
@@ -68,7 +70,14 @@ function saveHistoryToDisk() {
     }
   }
   const trimmed = sorted.slice(-MAX_HISTORY_DRAWS);
-  fs.writeFileSync(DATA_FILE, JSON.stringify(trimmed, null, 2), 'utf8');
+  const jsonText = JSON.stringify(trimmed, null, 2);
+  const tmpFile = `${DATA_FILE}.tmp`;
+  try {
+    fs.writeFileSync(tmpFile, jsonText, 'utf8');
+    fs.renameSync(tmpFile, DATA_FILE);
+  } catch {
+    fs.writeFileSync(DATA_FILE, jsonText, 'utf8');
+  }
 }
 
 function getSortedDraws() {
@@ -103,6 +112,7 @@ function buildStatePayload(mode = currentMode) {
     isPolling,
     schedule,
     recentDraws: [...draws].reverse().slice(0, 30),
+    syncDraws: draws.slice(-150),
     analysis
   };
 }
@@ -137,14 +147,49 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
     let newestDraw = null;
 
     try {
-      const fetched = isInitial ? await fetchInitialHistory(pagesToFetch) : await fetchLatestDraws();
       const prevMaxDraw = drawMap.size > 0 ? Math.max(...drawMap.keys()) : 0;
+      const prevMaxDrawObj = prevMaxDraw > 0 ? drawMap.get(prevMaxDraw) : null;
+      const knownIds = new Set(drawMap.keys());
+
+      const mergeAndFlushBatch = (batch) => {
+        let batchAdded = 0;
+        for (const d of batch) {
+          if (!drawMap.has(d.drawNumber)) {
+            drawMap.set(d.drawNumber, d);
+            added++;
+            batchAdded++;
+            if (!newestDraw || d.drawNumber > newestDraw.drawNumber) {
+              if (d.drawNumber > prevMaxDraw) {
+                newestDraw = d;
+              }
+            }
+          }
+        }
+        if (batchAdded > 0) {
+          lastPollTime = new Date().toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+          saveHistoryToDisk();
+          recomputeAnalysis();
+          lastPollStatus = newestDraw
+            ? `Kỳ mới #${newestDraw.drawId} (${newestDraw.time}) · Mẫu tích lũy: ${drawMap.size} kỳ`
+            : `Đã cập nhật mẫu tính toán: ${drawMap.size} kỳ`;
+          broadcastSse('state_update', buildStatePayload(currentMode));
+        }
+      };
+
+      const fetched = isInitial
+        ? await fetchInitialHistory(pagesToFetch, {
+            knownIds,
+            maxKnownId: prevMaxDraw,
+            latestStoredDateSlash: prevMaxDrawObj?.date || null,
+            onProgress: mergeAndFlushBatch
+          })
+        : await fetchLatestDraws();
 
       for (const d of fetched) {
         if (!drawMap.has(d.drawNumber)) {
           drawMap.set(d.drawNumber, d);
           added++;
-          if (d.drawNumber > prevMaxDraw) {
+          if (d.drawNumber > prevMaxDraw && (!newestDraw || d.drawNumber > newestDraw.drawNumber)) {
             newestDraw = d;
           }
         }
@@ -152,18 +197,32 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
 
       // Auto-detect and heal any gaps if Render slept or draws were missed
       if (prevMaxDraw > 0 && newestDraw && newestDraw.drawNumber - prevMaxDraw > 1) {
-        const missingCount = newestDraw.drawNumber - prevMaxDraw - 1;
-        console.log(`[Poll] Detected gap of ${missingCount} draws between #${prevMaxDraw} and #${newestDraw.drawNumber}. Auto-healing...`);
-        try {
-          const gapDraws = await fetchMissingGapDraws(prevMaxDraw + 1, newestDraw.drawNumber - 1);
-          for (const gd of gapDraws) {
-            if (!drawMap.has(gd.drawNumber)) {
-              drawMap.set(gd.drawNumber, gd);
-              added++;
-            }
+        // Check if the gap still exists after fetched batch
+        let gapStillExists = false;
+        for (let k = prevMaxDraw + 1; k < newestDraw.drawNumber; k++) {
+          if (!drawMap.has(k)) {
+            gapStillExists = true;
+            break;
           }
-        } catch (err) {
-          console.warn('[Poll] Gap healing error:', err.message);
+        }
+        if (gapStillExists) {
+          const missingCount = newestDraw.drawNumber - prevMaxDraw - 1;
+          console.log(`[Poll] Detected gap of ${missingCount} draws between #${prevMaxDraw} and #${newestDraw.drawNumber}. Auto-healing...`);
+          try {
+            const gapDraws = await fetchMissingGapDraws(
+              prevMaxDraw + 1,
+              newestDraw.drawNumber - 1,
+              prevMaxDrawObj?.date || null
+            );
+            for (const gd of gapDraws) {
+              if (!drawMap.has(gd.drawNumber)) {
+                drawMap.set(gd.drawNumber, gd);
+                added++;
+              }
+            }
+          } catch (err) {
+            console.warn('[Poll] Gap healing error:', err.message);
+          }
         }
       }
 
@@ -173,10 +232,11 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
         for (let i = 1; i < sortedKeys.length; i++) {
           const prevId = sortedKeys[i - 1];
           const currId = sortedKeys[i];
-          if (currId - prevId > 1 && currId - prevId <= 250) {
+          if (currId - prevId > 1 && currId - prevId <= 500) {
             console.log(`[Poll] Healing startup internal gap between #${prevId} and #${currId}...`);
             try {
-              const healed = await fetchMissingGapDraws(prevId + 1, currId - 1);
+              const prevObj = drawMap.get(prevId);
+              const healed = await fetchMissingGapDraws(prevId + 1, currId - 1, prevObj?.date || null);
               for (const hd of healed) {
                 if (!drawMap.has(hd.drawNumber)) {
                   drawMap.set(hd.drawNumber, hd);
@@ -191,6 +251,7 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
       }
 
       lastPollTime = new Date().toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+      lastPollCompletedMs = Date.now();
 
       if (added > 0) {
         saveHistoryToDisk();
@@ -366,6 +427,11 @@ const server = http.createServer(async (req, res) => {
     req.on('close', () => {
       sseClients.delete(res);
     });
+    // Trigger immediate live poll if server was idle or awaiting a new draw
+    const sched = getCurrentSchedule();
+    if (!isPolling && (Date.now() - lastPollCompletedMs > 15000 || sched.awaitingNewResult)) {
+      pollNow(false);
+    }
     return;
   }
 
@@ -379,6 +445,48 @@ const server = http.createServer(async (req, res) => {
     const payload = buildStatePayload(currentMode);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(payload));
+    return;
+  }
+
+  // Client LocalStorage Cache Sync API (restores draws immediately if cloud container slept/restarted)
+  if (pathname === '/api/client-sync' && req.method === 'POST') {
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 512000) break;
+    }
+    let added = 0;
+    try {
+      const parsed = JSON.parse(body || '{}');
+      const clientDraws = Array.isArray(parsed.draws) ? parsed.draws : [];
+      for (const item of clientDraws) {
+        if (
+          item &&
+          item.drawId &&
+          item.time &&
+          item.date &&
+          Array.isArray(item.numbers) &&
+          item.numbers.length === 20
+        ) {
+          const norm = normalizeDraw(item.drawId, item.time, item.date, item.numbers, item.source || 'client-cache');
+          if (norm.drawNumber > 0 && !drawMap.has(norm.drawNumber)) {
+            drawMap.set(norm.drawNumber, norm);
+            added++;
+          }
+        }
+      }
+      if (added > 0) {
+        saveHistoryToDisk();
+        recomputeAnalysis();
+        const fullState = buildStatePayload(currentMode);
+        broadcastSse('state_update', fullState);
+      }
+    } catch (err) {
+      console.warn('[ClientSync] Invalid payload:', err.message);
+    }
+    const payload = buildStatePayload(currentMode);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ...payload, syncAdded: added }));
     return;
   }
 

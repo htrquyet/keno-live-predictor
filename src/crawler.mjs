@@ -234,35 +234,95 @@ async function fetchMinhChinhPageGentle(page, dateStr, waitBeforeMs = 0) {
 }
 
 /**
+ * Compute date strings (DD-MM-YYYY) from today back to cover latestStoredDateSlash (between minDays and maxDays)
+ */
+function buildDateRangeToCover(latestStoredDateSlash = null, minDays = 3, maxDays = 7) {
+  let daysCount = minDays;
+  if (latestStoredDateSlash) {
+    const vn = getVnNowParts();
+    const todayUtcMs = Date.UTC(vn.year, vn.month - 1, vn.day);
+    const storedUtcMs = parseSlashDateToUtcMs(latestStoredDateSlash);
+    if (storedUtcMs !== null && todayUtcMs >= storedUtcMs) {
+      const diffDays = Math.ceil((todayUtcMs - storedUtcMs) / 86400000) + 1;
+      daysCount = Math.min(maxDays, Math.max(minDays, diffDays));
+    }
+  }
+  const dates = [];
+  for (let i = 0; i < daysCount; i++) {
+    dates.push(getVnDateStr(i));
+  }
+  return dates;
+}
+
+/**
  * Shared paginated crawler across multiple MinhChinh date strings (15 draws/page => 8 pages covers 119 draws/day)
  */
-async function crawlMinhChinhDates(dates, pagesPerDay = 8) {
+async function crawlMinhChinhDates(dates, pagesPerDay = 8, options = {}) {
+  const { knownIds = null, maxKnownId = 0, onProgress = null } = options;
   const map = new Map();
   let requestCount = 0;
 
   for (const d of dates) {
+    const dayBatch = [];
+    let reachedKnownContiguous = false;
+
     for (let p = 1; p <= pagesPerDay; p++) {
       try {
-        const waitMs = requestCount === 0 ? 0 : 350;
+        const waitMs = requestCount === 0 ? 0 : 300;
         requestCount++;
         const list = await fetchMinhChinhPageGentle(p, d, waitMs);
         if (!list || list.length === 0) {
           break;
         }
         let newCount = 0;
+        let hitKnown = false;
         for (const item of list) {
+          if (knownIds && knownIds.has(item.drawNumber)) {
+            hitKnown = true;
+          }
           if (!map.has(item.drawNumber)) {
             map.set(item.drawNumber, item);
             newCount++;
+            if (!knownIds || !knownIds.has(item.drawNumber)) {
+              dayBatch.push(item);
+            }
           }
         }
-        if (newCount === 0 && p > 2) {
-          // Already have all draws from this page onward
+
+        // Flush page 1 of today immediately so UI and disk get the newest draw in <1s
+        if (requestCount === 1 && dayBatch.length > 0 && typeof onProgress === 'function') {
+          onProgress([...dayBatch]);
+          dayBatch.length = 0;
+        }
+
+        // If we connected with known history and already have >= 250 draws stored, stop early
+        const minInList = Math.min(...list.map((x) => x.drawNumber));
+        if (
+          knownIds &&
+          knownIds.size >= 250 &&
+          maxKnownId > 0 &&
+          (hitKnown || minInList <= maxKnownId + 1)
+        ) {
+          reachedKnownContiguous = true;
+          break;
+        }
+
+        // MinhChinh has 15 draws/page and day starts at 06:08; stop paging this date if end-of-day reached
+        const hasOpeningDraw = list.some((x) => x.time === '06:08');
+        if (list.length < 15 || hasOpeningDraw || (newCount === 0 && p > 2)) {
           break;
         }
       } catch (err) {
         console.warn(`[Crawler] Warn fetching page ${p} date ${d}:`, err.message);
+        break;
       }
+    }
+
+    if (dayBatch.length > 0 && typeof onProgress === 'function') {
+      onProgress([...dayBatch]);
+    }
+    if (reachedKnownContiguous) {
+      break;
     }
   }
 
@@ -270,19 +330,31 @@ async function crawlMinhChinhDates(dates, pagesPerDay = 8) {
 }
 
 /**
- * Fetch multiple pages across multiple days (today, yesterday, day before) to guarantee no missing draws
+ * Fetch multiple pages across multiple days to guarantee no missing draws, stopping early once connected to stored history
  */
-export async function fetchInitialHistory(pagesPerDay = 8) {
-  const dates = [getVnDateStr(0), getVnDateStr(1), getVnDateStr(2)];
-  const map = await crawlMinhChinhDates(dates, pagesPerDay);
+export async function fetchInitialHistory(pagesPerDay = 8, options = {}) {
+  const { knownIds = null, maxKnownId = 0, latestStoredDateSlash = null, onProgress = null } = options;
+  const dates = buildDateRangeToCover(latestStoredDateSlash, 3, 7);
+  const map = await crawlMinhChinhDates(dates, pagesPerDay, {
+    knownIds,
+    maxKnownId,
+    onProgress
+  });
 
   // Also check fallback in case it has a brand-new draw
   try {
     const fallbackList = await fetchKetQuaDienToanLatest();
+    const extra = [];
     for (const item of fallbackList) {
       if (!map.has(item.drawNumber)) {
         map.set(item.drawNumber, item);
+        if (!knownIds || !knownIds.has(item.drawNumber)) {
+          extra.push(item);
+        }
       }
+    }
+    if (extra.length > 0 && typeof onProgress === 'function') {
+      onProgress(extra);
     }
   } catch (err) {
     // Ignore fallback error if primary succeeded
@@ -316,17 +388,18 @@ export async function fetchOlderHistoryDraws(oldestDraw = null, daysToFetch = 2,
 }
 
 /**
- * Backfill any missing draws between two IDs (self-healing)
+ * Backfill any missing draws between two IDs (self-healing across up to 7 days)
  */
-export async function fetchMissingGapDraws(startDrawNumber, endDrawNumber) {
+export async function fetchMissingGapDraws(startDrawNumber, endDrawNumber, startDateSlash = null) {
   const map = new Map();
-  const dates = [getVnDateStr(0), getVnDateStr(1), getVnDateStr(2)];
+  const dates = buildDateRangeToCover(startDateSlash, 3, 7);
   let requestCount = 0;
 
   for (const d of dates) {
+    let stopAllDates = false;
     for (let p = 1; p <= 8; p++) {
       try {
-        const waitMs = requestCount === 0 ? 0 : 350;
+        const waitMs = requestCount === 0 ? 0 : 300;
         requestCount++;
         const list = await fetchMinhChinhPageGentle(p, d, waitMs);
         if (!list || list.length === 0) break;
@@ -337,15 +410,22 @@ export async function fetchMissingGapDraws(startDrawNumber, endDrawNumber) {
             anyInRange = true;
           }
         }
-        // If oldest on page is already older than startDrawNumber, stop this date
-        const minOnPage = Math.min(...list.map(x => x.drawNumber));
-        if (minOnPage < startDrawNumber && !anyInRange) {
+        // If oldest on page is already older than startDrawNumber, we have passed the gap completely
+        const minOnPage = Math.min(...list.map((x) => x.drawNumber));
+        if (minOnPage < startDrawNumber) {
+          stopAllDates = true;
+          break;
+        }
+        const hasOpeningDraw = list.some((x) => x.time === '06:08');
+        if (list.length < 15 || hasOpeningDraw || (!anyInRange && p > 2)) {
           break;
         }
       } catch (err) {
         console.warn(`[Crawler] Gap healing error on date ${d} p${p}:`, err.message);
+        break;
       }
     }
+    if (stopAllDates) break;
   }
 
   return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);

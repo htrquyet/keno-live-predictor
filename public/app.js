@@ -333,28 +333,28 @@ function renderAll(state) {
   const acc = analysis.modelAccuracy;
   const weightModels = [
     {
-      name: '🔗 Ma Trận Chuyển Tiếp Shrunk Markov (Alpha=150 LLR)',
-      weight: Math.round(w.markov * 100),
-      acc: acc.markov,
-      desc: 'Tính lực kéo điều kiện từ 20 số kỳ trước với làm mượt Bayesian về nền 25%'
-    },
-    {
-      name: '🔥 Tần Suất Lũy Tiến Empirical-Bayes (Expanding Freq)',
+      name: '🔥 Tần Suất Nổ Toàn Mẫu & Chống Loãng (Overall Hot Frequency)',
       weight: Math.round(w.freq * 100),
       acc: acc.freq,
-      desc: `Đo log-odds xuất hiện của từng số trên toàn bộ ${analysis.totalHistoricalDraws} kỳ lịch sử`
+      desc: `Ưu tiên nhóm số nổ nhiều nhất trên ${analysis.totalHistoricalDraws} kỳ (tự động pha nhịp 120 kỳ khi mẫu > 400 kỳ)`
     },
     {
-      name: '⚡ Phong Độ Mượt EWMA (HL=12 & HL=28 kỳ)',
+      name: '⚡ Phong Độ Nóng 10 & 20 Kỳ Gần Nhất (Recent Hot Momentum)',
       weight: Math.round(((w.momentum10 || 0) + (w.momentum20 || 0)) * 100),
       acc: acc.momentum10,
-      desc: 'Trung bình hàm mũ đa khung thời gian tránh nhiễu gãy đoạn khi thay đổi cửa sổ'
+      desc: 'Bắt nhịp các con số đang có phong độ cao, nổ đều đặn trong 10 và 20 kỳ quay gần đây'
     },
     {
-      name: '⏳ Nhịp Rơi & Chống Kiệt Sức (Calibrated Cycle Z)',
+      name: '🔗 Ma Trận Kéo Theo Markov (Conditional Transitions)',
+      weight: Math.round(w.markov * 100),
+      acc: acc.markov,
+      desc: 'Tính lực kéo chuyển tiếp trực tiếp từ 20 con số vừa nổ ở kỳ gần nhất'
+    },
+    {
+      name: '⏳ Điểm Rơi Chu Kỳ & Cầu Bệt (Cycle Rhythms & Streaks)',
       weight: Math.round(w.cycle * 100),
       acc: acc.cycle,
-      desc: 'Hiệu chuẩn thang Z-score cho nhịp rơi 0–1 kỳ, chu kỳ 7–8 kỳ và phạt bệt >= 4 kỳ'
+      desc: 'Giữ vững cầu bệt >= 2 kỳ (92đ), nhịp rơi vàng 0–2 kỳ (88–92đ) và loại bỏ lô gan'
     }
   ];
 

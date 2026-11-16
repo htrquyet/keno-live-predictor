@@ -1,41 +1,38 @@
 /**
- * Vietlott Keno 80 Pair-First Adaptive Prediction Engine
- * Specialized for Bậc 2 (2-number pairs & Disjoint Top-4 Pair Portfolio) + Bậc 3–5 + RTP Backtesting
+ * Vietlott Keno 80 Multi-Model Adaptive Prediction Engine (Hot-First Champion Engine)
+ * Specialized for Low Tiers: Bậc 2, Bậc 3, Bậc 4, Bậc 5 + Disjoint Top-4 Hot Pairs + Parity/Size
  *
- * Kiến trúc:
- * 1. Tín hiệu chuẩn hóa Z-score & Empirical-Bayes Shrinkage:
- *    - Markov bậc 1 (trans1) làm mượt Beta/Dirichlet (alpha = 150 kéo về nền 0.25) dạng Log-Likelihood Ratio.
- *    - Tần suất lũy tiến (Expanding Frequency) & EWMA đa khung (HL = 12, HL = 28) dạng Log-Odds.
- *    - Chu kỳ nhịp rơi & chống kiệt sức hiệu chuẩn về Z-score đồng nhất thang đo.
- * 2. Pair-First Scoring (3.160 cặp):
- *    - Chấm trực tiếp mọi cặp (a, b): tổng Z-score thành phần + Co-occurrence Lift làm mượt + điểm đa vùng.
- *    - Cặp VIP #1 lấy cặp điểm cao nhất (tuân thủ bất đẳng thức hoán vị Best-with-Best).
- *    - Top 4 Song Thủ chọn 4 cặp ĐỘC LẬP (8 số không trùng) để tối đa hóa P(ít nhất 1 cặp trúng).
- * 3. Backtest lũy tiến O(N) kèm chỉ số RTP (%) thực tế và so sánh với RTP lý thuyết Keno.
+ * Chiến lược Cốt Lõi (Khôi phục & Tối ưu từ kiến trúc gốc Hot-First Champion):
+ * 1. ƯU TIÊN TUYỆT ĐỐI SỐ HAY RA / DỄ RA:
+ *    - Toàn bộ thuật toán tập trung vào nhóm số có tần suất nổ cao nhất toàn mẫu và phong độ gần đây (10 kỳ & 20 kỳ).
+ *    - Tuyệt đối giữ vững số đang nổ, cầu bệt (streak >= 2: 92đ) và nhịp rơi vàng 0–2 kỳ (88–92đ).
+ *    - Tự động chống loãng tần suất khi mẫu tích lũy vượt quá 400 kỳ bằng cách pha trộn tần suất 120 kỳ gần nhất (f120).
+ *    - Lọc kiệt sức khi bóng nổ quá dày (>= 4/5 kỳ gần nhất) và loại bỏ lô gan dài ngày.
+ * 2. BẬC 2 & DÀN 4 CẶP SONG THỦ ĐỘC LẬP TỪ TOP 8 SỐ NÓNG:
+ *    - Bậc 2 (VIP #1): Bộ đôi dẫn đầu bảng điểm tổng hợp [Top 1, Top 2].
+ *    - Dàn 4 Cặp Song Thủ: Ghép 4 cặp độc lập từ Top 8 số điểm cao nhất ([1-2], [3-4], [5-6], [7-8]) để tối đa hóa tỷ lệ trúng thực tế mỗi kỳ.
+ * 3. BACKTEST LŨY TIẾN O(N) KÈM CHỈ SỐ RTP (%) THỰC TẾ:
+ *    - Đối soát lũy tiến nhanh O(N) cho cả 4 chế độ chiến lược (Adaptive, Hot, Due, Markov).
  */
 
-const BASE_P = 0.25;
 const BASE_PAIR_P = (20 * 19) / (80 * 79); // ~0.06012658 (380/6320)
 
 const DEFAULT_WEIGHTS = {
   freq: 0.20,
-  momentum10: 0.10,
-  momentum20: 0.10,
-  markov: 0.35,
-  cycle: 0.25
+  momentum10: 0.30,
+  momentum20: 0.20,
+  markov: 0.15,
+  cycle: 0.15
 };
 
 const MODE_WEIGHTS = {
   adaptive: DEFAULT_WEIGHTS,
-  markov: { freq: 0.04, momentum10: 0.03, momentum20: 0.03, markov: 0.86, cycle: 0.04 },
-  hot: { freq: 0.25, momentum10: 0.35, momentum20: 0.25, markov: 0.10, cycle: 0.05 },
-  due: { freq: 0.15, momentum10: 0.10, momentum20: 0.10, markov: 0.25, cycle: 0.40 }
+  hot: { freq: 0.15, momentum10: 0.40, momentum20: 0.25, markov: 0.10, cycle: 0.10 },
+  due: { freq: 0.15, momentum10: 0.20, momentum20: 0.15, markov: 0.15, cycle: 0.35 },
+  markov: { freq: 0.15, momentum10: 0.20, momentum20: 0.15, markov: 0.35, cycle: 0.15 }
 };
 
 const MIN_WARMUP_DRAWS = 10;
-const PAIR_CO_WEIGHT = 0.15;
-const PAIR_ZONE_WEIGHT = 0.10;
-const MARKOV_ALPHA = 150;
 
 // Theoretical Keno benchmarks (uniform 20/80 draw, 10,000đ ticket)
 export const THEORETICAL_KENO = {
@@ -43,38 +40,16 @@ export const THEORETICAL_KENO = {
   bac2Rtp: Number((BASE_PAIR_P * 9 * 100).toFixed(1)), // 54.1%
   top4DisjointAnyWinRate: 22.3, // Exact inclusion-exclusion 22.26%
   top4DisjointRtp: 54.1,
-  bac3WinRate: 15.3,
-  bac3Rtp: 83.3,
-  bac4WinRate: 25.9,
-  bac4Rtp: 79.6,
-  bac5WinRate: 9.7,
-  bac5Rtp: 63.3
+  bac3WinRate: 15.26,
+  bac3Rtp: 72.1,
+  bac4WinRate: 25.89,
+  bac4Rtp: 64.9,
+  bac5WinRate: 8.39,
+  bac5Rtp: 54.0
 };
 
 /**
- * Standardize an 81-length array (indices 1..80) to zero mean and unit variance.
- */
-function zScore80(rawArr) {
-  let sum = 0;
-  let sum2 = 0;
-  for (let n = 1; n <= 80; n++) {
-    const v = rawArr[n] || 0;
-    sum += v;
-    sum2 += v * v;
-  }
-  const mean = sum / 80;
-  const variance = sum2 / 80 - mean * mean;
-  const out = new Float64Array(81);
-  if (variance <= 1e-12) return out;
-  const sd = Math.sqrt(variance);
-  for (let n = 1; n <= 80; n++) {
-    out[n] = ((rawArr[n] || 0) - mean) / sd;
-  }
-  return out;
-}
-
-/**
- * Normalize an array of 81 items (index 1..80) into 0..100 scale for display/compat.
+ * Normalize an array of 81 items (index 1..80) into 0..100 scale
  */
 function normalize80(rawArr) {
   let min = Infinity;
@@ -97,246 +72,205 @@ function normalize80(rawArr) {
 }
 
 /**
- * Compute cycle/fatigue score in Z-ready scale without overriding statistical signals.
+ * Compute effective frequency blending 120-draw window when totalDraws > 400 to prevent long-sample dilution
  */
-function computeCycleSignal(gap, streak) {
-  if (streak >= 4) return -1.2;
-  if (gap === 0 || gap === 1) return 0.6;
-  if (gap >= 7 && gap <= 8) return 0.3;
-  if (gap >= 10) return -0.3;
-  return 0;
+function computeEffectiveFreq(countAllVal, count120Val, totalDraws) {
+  const fBase = countAllVal / totalDraws;
+  if (totalDraws <= 400) {
+    return fBase;
+  }
+  const f120 = count120Val / Math.min(120, totalDraws);
+  const alpha = Math.min(0.65, ((totalDraws - 400) / 200) * 0.65);
+  return alpha * f120 + (1 - alpha) * fBase;
 }
 
 /**
- * Create an incremental state tracker so walk-forward backtests run in O(N) instead of O(N^2).
+ * Compute cycle rhythm score (exact calibrated Hot-First Champion scale)
  */
-function createIncrementalTracker() {
-  const d12 = Math.exp(-Math.LN2 / 12);
-  const d28 = Math.exp(-Math.LN2 / 28);
-  return {
-    totalDraws: 0,
-    prevNumbers: null,
-    countAll: new Int32Array(81),
-    count20Window: [],
-    count10Window: [],
-    count5Window: [],
-    count20: new Int32Array(81),
-    count10: new Int32Array(81),
-    count5: new Int32Array(81),
-    ewma12: new Float64Array(81),
-    ewma28: new Float64Array(81),
-    wSum12: 0,
-    wSum28: 0,
-    d12,
-    d28,
-    lastSeenIdx: new Int32Array(81).fill(-1),
-    currentStreak: new Int32Array(81),
-    coMatrix: Array.from({ length: 81 }, () => new Int32Array(81)),
-    trans1: Array.from({ length: 81 }, () => new Int32Array(81)),
-    trans1Count: new Int32Array(81),
-    zoneLast5Window: []
-  };
+function computeCycleScore(gap, streak) {
+  if (streak >= 2) return 92; // cầu bệt thông
+  if (gap === 0) return 88; // bóng vừa nổ kỳ trước (repeat ball)
+  if (gap === 1 || gap === 2) return 92; // nhịp rơi vàng 1-2 kỳ
+  if (gap >= 3 && gap <= 6) return 65; // nhịp rơi trung bình
+  if (gap >= 7 && gap <= 8) return 70; // nhịp chu kỳ lặp
+  if (gap >= 9 && gap <= 11) return 40; // gan nhẹ
+  return 20; // gan sâu
 }
 
-function pushDrawToTracker(st, draw) {
-  const nums = draw.numbers;
-  const idx = st.totalDraws;
-  const numSet = new Set(nums);
+/**
+ * Compute multi-model signals: Frequency, Momentum, Markov Transitions, and Cycle Rhythms
+ * (Giữ vững số hay ra, cầu bệt và số phong độ cao - Không hạ nhiệt khi số nổ nhiều)
+ */
+export function computeSubModels(draws) {
+  const totalDraws = draws.length;
+  const countAll = new Array(81).fill(0);
+  const count120 = new Array(81).fill(0);
+  const count20 = new Array(81).fill(0);
+  const count10 = new Array(81).fill(0);
+  const count5 = new Array(81).fill(0);
+  const currentGap = new Array(81).fill(totalDraws);
+  const currentStreak = new Array(81).fill(0);
 
-  st.wSum12 = st.wSum12 * st.d12 + 1;
-  st.wSum28 = st.wSum28 * st.d28 + 1;
+  const coMatrix = Array.from({ length: 81 }, () => new Array(81).fill(0));
+  const trans1 = Array.from({ length: 81 }, () => new Array(81).fill(0));
 
-  for (let n = 1; n <= 80; n++) {
-    st.ewma12[n] *= st.d12;
-    st.ewma28[n] *= st.d28;
-    if (numSet.has(n)) {
-      st.countAll[n]++;
-      st.ewma12[n] += 1;
-      st.ewma28[n] += 1;
-      st.lastSeenIdx[n] = idx;
-      st.currentStreak[n]++;
-    } else {
-      st.currentStreak[n] = 0;
-    }
-  }
-
-  for (let i = 0; i < nums.length; i++) {
-    const a = nums[i];
-    for (let j = i + 1; j < nums.length; j++) {
-      const b = nums[j];
-      st.coMatrix[a][b]++;
-      st.coMatrix[b][a]++;
-    }
-  }
-
-  if (st.prevNumbers) {
-    for (const a of st.prevNumbers) {
-      st.trans1Count[a]++;
-      for (const b of nums) {
-        st.trans1[a][b]++;
-      }
-    }
-  }
-
-  // Rolling exact counts for UI display (last 20, 10, 5 draws)
-  st.count20Window.push(nums);
-  for (const n of nums) st.count20[n]++;
-  if (st.count20Window.length > 20) {
-    const old = st.count20Window.shift();
-    for (const n of old) st.count20[n]--;
-  }
-
-  st.count10Window.push(nums);
-  for (const n of nums) st.count10[n]++;
-  if (st.count10Window.length > 10) {
-    const old = st.count10Window.shift();
-    for (const n of old) st.count10[n]--;
-  }
-
-  st.count5Window.push(nums);
-  for (const n of nums) st.count5[n]++;
-  if (st.count5Window.length > 5) {
-    const old = st.count5Window.shift();
-    for (const n of old) st.count5[n]--;
-  }
-
-  st.zoneLast5Window.push(nums);
-  if (st.zoneLast5Window.length > 5) {
-    st.zoneLast5Window.shift();
-  }
-
-  st.prevNumbers = nums;
-  st.totalDraws++;
-}
-
-function extractSubModelsFromTracker(st, includeNotes = true) {
-  const totalDraws = st.totalDraws;
   if (totalDraws === 0) {
     const emptyNotes = Array.from({ length: 81 }, () => ({ note: 'Mới', type: 'optimal' }));
     return {
-      totalDraws: 0,
-      zFreq: new Float64Array(81),
-      zMomentum10: new Float64Array(81),
-      zMomentum20: new Float64Array(81),
-      zMarkov: new Float64Array(81),
-      zCycle: new Float64Array(81),
+      rawFreq: new Array(81).fill(0),
+      rawMomentum: new Array(81).fill(0),
+      rawMomentum20: new Array(81).fill(0),
+      rawMarkov: new Array(81).fill(0),
+      rawCycle: new Array(81).fill(50),
       freqNorm: new Array(81).fill(50),
       momentumNorm: new Array(81).fill(50),
       momentum20Norm: new Array(81).fill(50),
       markovNorm: new Array(81).fill(50),
       cycleNorm: new Array(81).fill(50),
-      countAll: new Array(81).fill(0),
-      count20: new Array(81).fill(0),
-      count10: new Array(81).fill(0),
-      count5: new Array(81).fill(0),
-      currentGap: new Array(81).fill(0),
-      currentStreak: new Array(81).fill(0),
-      coMatrix: Array.from({ length: 81 }, () => new Array(81).fill(0)),
+      countAll,
+      count20,
+      count10,
+      count5,
+      currentGap,
+      currentStreak,
+      coMatrix,
       statusNotes: emptyNotes,
       coolingNotes: emptyNotes,
       zoneCounts: new Array(8).fill(0)
     };
   }
 
-  const lastNums = st.prevNumbers || [];
-  const rawFreq = new Float64Array(81);
-  const rawMomentum = new Float64Array(81);
-  const rawMomentum20 = new Float64Array(81);
-  const rawMarkov = new Float64Array(81);
-  const rawCycle = new Float64Array(81);
-  const currentGap = new Array(81).fill(totalDraws);
+  const drawSets = draws.map((d) => new Set(d.numbers));
+  const lastDraw = draws[totalDraws - 1];
+  const lastNums = lastDraw.numbers;
 
-  for (let n = 1; n <= 80; n++) {
-    const g = st.lastSeenIdx[n] >= 0 ? totalDraws - 1 - st.lastSeenIdx[n] : totalDraws;
-    currentGap[n] = g;
-    const streak = st.currentStreak[n];
+  for (let idx = 0; idx < totalDraws; idx++) {
+    const nums = draws[idx].numbers;
+    const age = totalDraws - 1 - idx;
 
-    rawFreq[n] = Math.log((st.countAll[n] + 20 * BASE_P) / (totalDraws + 20) / BASE_P);
-    rawMomentum[n] = Math.log((st.ewma12[n] + 6 * BASE_P) / (st.wSum12 + 6) / BASE_P);
-    rawMomentum20[n] = Math.log((st.ewma28[n] + 12 * BASE_P) / (st.wSum28 + 12) / BASE_P);
+    for (let i = 0; i < nums.length; i++) {
+      const a = nums[i];
+      countAll[a]++;
+      if (age < 120) count120[a]++;
+      if (age < 20) count20[a]++;
+      if (age < 10) count10[a]++;
+      if (age < 5) count5[a]++;
 
-    let mk = 0;
-    for (const a of lastNums) {
-      const p = (st.trans1[a][n] + MARKOV_ALPHA * BASE_P) / (st.trans1Count[a] + MARKOV_ALPHA);
-      mk += Math.log(p / BASE_P);
+      for (let j = i + 1; j < nums.length; j++) {
+        const b = nums[j];
+        coMatrix[a][b]++;
+        coMatrix[b][a]++;
+      }
     }
-    rawMarkov[n] = mk;
-    rawCycle[n] = computeCycleSignal(g, streak);
+
+    if (idx > 0) {
+      const prevNums = draws[idx - 1].numbers;
+      for (const a of prevNums) {
+        for (const b of nums) {
+          trans1[a][b]++;
+        }
+      }
+    }
   }
 
-  const zFreq = zScore80(rawFreq);
-  const zMomentum10 = zScore80(rawMomentum);
-  const zMomentum20 = zScore80(rawMomentum20);
-  const zMarkov = zScore80(rawMarkov);
-  const zCycle = zScore80(rawCycle);
-
-  let statusNotes = null;
-  let zoneCounts = null;
-  if (includeNotes) {
-    statusNotes = Array.from({ length: 81 }, () => ({ note: '', type: 'optimal' }));
-    for (let n = 1; n <= 80; n++) {
-      const fAll = st.countAll[n] / totalDraws;
-      const g = currentGap[n];
-      const streak = st.currentStreak[n];
-      const c5 = st.count5[n];
-
-      let note = `Cân bằng (${st.countAll[n]}/${totalDraws}k)`;
-      let noteType = 'optimal';
-      if (streak >= 2) {
-        note = `Cầu bệt thông (${streak} kỳ · ${st.countAll[n]}/${totalDraws}k)`;
-        noteType = 'hot';
-      } else if (g === 0) {
-        note = `Vừa nổ kỳ trước (${c5}/5k · ${st.countAll[n]}/${totalDraws}k)`;
-        noteType = 'hot';
-      } else if (g >= 1 && g <= 4 && fAll >= 0.25) {
-        note = `Nhịp nóng (cách ${g}k · ${st.countAll[n]}/${totalDraws}k)`;
-        noteType = 'hot';
-      } else if (g >= 1 && g <= 4) {
-        note = `Nhịp đều (cách ${g}k · ${st.countAll[n]}/${totalDraws}k)`;
-        noteType = 'optimal';
-      } else if (g >= 8) {
-        note = `Lô gan (cách ${g} kỳ)`;
-        noteType = 'cold';
-      } else if (fAll < 0.20) {
-        note = `Tần suất thấp (${st.countAll[n]}/${totalDraws}k)`;
-        noteType = 'cold';
+  for (let n = 1; n <= 80; n++) {
+    for (let i = totalDraws - 1; i >= 0; i--) {
+      if (drawSets[i].has(n)) {
+        currentGap[n] = totalDraws - 1 - i;
+        break;
       }
-      statusNotes[n] = { note, type: noteType };
+    }
+    let st = 0;
+    for (let i = totalDraws - 1; i >= 0; i--) {
+      if (drawSets[i].has(n)) st++;
+      else break;
+    }
+    currentStreak[n] = st;
+  }
+
+  const rawFreq = new Array(81).fill(0);
+  const rawMomentum = new Array(81).fill(0);
+  const rawMomentum20 = new Array(81).fill(0);
+  const rawMarkov = new Array(81).fill(0);
+  const rawCycle = new Array(81).fill(0);
+  const statusNotes = Array.from({ length: 81 }, () => ({ note: '', type: 'optimal' }));
+
+  for (let n = 1; n <= 80; n++) {
+    const fAll = computeEffectiveFreq(countAll[n], count120[n], totalDraws);
+    const f20 = count20[n] / Math.min(20, totalDraws);
+    const f10 = count10[n] / Math.min(10, totalDraws);
+
+    let mkHits = 0;
+    for (const a of lastNums) {
+      mkHits += trans1[a][n];
+    }
+    const mNorm = mkHits / Math.max(1, totalDraws * 20);
+
+    const g = currentGap[n];
+    const st = currentStreak[n];
+    const c5 = count5[n];
+
+    let note = `Số hay ra (${countAll[n]}/${totalDraws}k)`;
+    let noteType = 'optimal';
+
+    if (st >= 2) {
+      note = `Cầu bệt thông (${st} kỳ liên tiếp · nổ ${countAll[n]}/${totalDraws}k)`;
+      noteType = 'hot';
+    } else if (g === 0) {
+      note = `Vừa nổ kỳ trước (${c5}/5 kỳ gần nhất · nổ ${countAll[n]}/${totalDraws}k)`;
+      noteType = 'hot';
+    } else if (g >= 1 && g <= 4 && fAll >= 0.25) {
+      note = `Số nóng nhịp rơi đẹp (cách ${g}k · nổ ${countAll[n]}/${totalDraws}k)`;
+      noteType = 'hot';
+    } else if (g >= 1 && g <= 4) {
+      note = `Nhịp rơi đều (cách ${g}k · nổ ${countAll[n]}/${totalDraws}k)`;
+      noteType = 'optimal';
+    } else if (g >= 8) {
+      note = `Lô gan (cách ${g} kỳ) - Thấp`;
+      noteType = 'cold';
+    } else if (fAll < 0.20) {
+      note = `Tần suất thấp (${countAll[n]}/${totalDraws}k)`;
+      noteType = 'cold';
     }
 
-    zoneCounts = new Array(8).fill(0);
-    for (const nums of st.zoneLast5Window) {
-      for (const num of nums) {
-        const z = Math.min(7, Math.floor((num - 1) / 10));
-        zoneCounts[z]++;
-      }
+    statusNotes[n] = { note, type: noteType };
+
+    rawFreq[n] = fAll * 100;
+    rawMomentum[n] = f10 * 100;
+    rawMomentum20[n] = f20 * 100;
+    rawMarkov[n] = mNorm * 100;
+    rawCycle[n] = computeCycleScore(g, st);
+  }
+
+  // Phân bổ 8 vùng đầu số
+  const recentWindow = Math.min(5, totalDraws);
+  const zoneCounts = new Array(8).fill(0);
+  for (let idx = totalDraws - recentWindow; idx < totalDraws; idx++) {
+    if (idx < 0) continue;
+    for (const num of draws[idx].numbers) {
+      const z = Math.min(7, Math.floor((num - 1) / 10));
+      zoneCounts[z]++;
     }
   }
 
   return {
-    totalDraws,
-    zFreq,
-    zMomentum10,
-    zMomentum20,
-    zMarkov,
-    zCycle,
     rawFreq,
     rawMomentum,
     rawMomentum20,
     rawMarkov,
     rawCycle,
-    freqNorm: normalize80(zFreq),
-    momentumNorm: normalize80(zMomentum10),
-    momentum20Norm: normalize80(zMomentum20),
-    markovNorm: normalize80(zMarkov),
-    cycleNorm: normalize80(zCycle),
-    countAll: Array.from(st.countAll),
-    count20: Array.from(st.count20),
-    count10: Array.from(st.count10),
-    count5: Array.from(st.count5),
+    freqNorm: normalize80(rawFreq),
+    momentumNorm: normalize80(rawMomentum),
+    momentum20Norm: normalize80(rawMomentum20),
+    markovNorm: normalize80(rawMarkov),
+    cycleNorm: normalize80(rawCycle),
+    countAll,
+    count20,
+    count10,
+    count5,
     currentGap,
-    currentStreak: Array.from(st.currentStreak),
-    coMatrix: st.coMatrix,
+    currentStreak,
+    coMatrix,
     statusNotes,
     coolingNotes: statusNotes,
     zoneCounts
@@ -344,26 +278,15 @@ function extractSubModelsFromTracker(st, includeNotes = true) {
 }
 
 /**
- * Compute calibrated multi-model signals from a draw history array.
- */
-export function computeSubModels(draws) {
-  const tracker = createIncrementalTracker();
-  for (const d of draws) {
-    pushDrawToTracker(tracker, d);
-  }
-  return extractSubModelsFromTracker(tracker, true);
-}
-
-/**
- * Score all 80 numbers using Z-score calibrated model weights.
+ * Score all 80 numbers prioritizing hot, high-frequency numbers
  */
 export function scoreNumbers(subModels, weights = DEFAULT_WEIGHTS) {
   const {
-    zFreq,
-    zMomentum10,
-    zMomentum20,
-    zMarkov,
-    zCycle,
+    rawFreq,
+    rawMomentum,
+    rawMomentum20,
+    rawMarkov,
+    rawCycle,
     freqNorm,
     momentumNorm,
     momentum20Norm,
@@ -375,41 +298,56 @@ export function scoreNumbers(subModels, weights = DEFAULT_WEIGHTS) {
     count5,
     currentGap,
     currentStreak,
-    statusNotes,
-    coolingNotes
+    statusNotes
   } = subModels;
 
-  const notes = statusNotes || coolingNotes || [];
-  const wFreq = weights.freq ?? DEFAULT_WEIGHTS.freq;
-  const wM10 = weights.momentum10 ?? DEFAULT_WEIGHTS.momentum10;
-  const wM20 = weights.momentum20 ?? DEFAULT_WEIGHTS.momentum20;
-  const wMarkov = weights.markov ?? DEFAULT_WEIGHTS.markov;
-  const wCycle = weights.cycle ?? DEFAULT_WEIGHTS.cycle;
-
+  const notes = statusNotes || subModels.coolingNotes || [];
   const ranked = [];
-  for (let n = 1; n <= 80; n++) {
-    const fZ = zFreq ? zFreq[n] : ((freqNorm[n] - 50) / 20);
-    const m10Z = zMomentum10 ? zMomentum10[n] : ((momentumNorm[n] - 50) / 20);
-    const m20Z = zMomentum20 ? zMomentum20[n] : (momentum20Norm ? (momentum20Norm[n] - 50) / 20 : m10Z);
-    const mkZ = zMarkov ? zMarkov[n] : ((markovNorm[n] - 50) / 20);
-    const cycZ = zCycle ? zCycle[n] : ((cycleNorm[n] - 50) / 20);
 
-    const rawZ = wFreq * fZ + wM10 * m10Z + wM20 * m20Z + wMarkov * mkZ + wCycle * cycZ;
-    const displayScore = Number(Math.min(99, Math.max(15, 55 + rawZ * 16)).toFixed(2));
-    const confidence = Math.min(96, Math.max(50, Math.round(62 + rawZ * 12)));
-    const cInfo = notes[n] || { note: 'Cân bằng', type: 'optimal' };
+  const wFreq = weights.freq ?? 0.20;
+  const wM10 = weights.momentum10 ?? 0.30;
+  const wM20 = weights.momentum20 ?? 0.20;
+  const wMarkov = weights.markov ?? 0.15;
+  const wCycle = weights.cycle ?? 0.15;
+
+  for (let n = 1; n <= 80; n++) {
+    const fVal = rawFreq ? rawFreq[n] : freqNorm[n];
+    const mVal = rawMomentum ? rawMomentum[n] : momentumNorm[n];
+    const m20Val = rawMomentum20 ? rawMomentum20[n] : (momentum20Norm ? momentum20Norm[n] : mVal);
+    const mkVal = rawMarkov ? rawMarkov[n] : markovNorm[n];
+    const cycVal = rawCycle ? rawCycle[n] : cycleNorm[n];
+    const c5 = count5[n];
+    const g = currentGap[n];
+
+    // Bộ lọc chống quá tải / kiệt sức (khi bóng nổ >= 4 lần trong 5 kỳ gần nhất)
+    let fatigueMult = 1.0;
+    if (c5 >= 4) fatigueMult = 0.55;
+    else if (c5 === 3 && g === 0) fatigueMult = 0.82;
+
+    const rawTotal = (
+      wFreq * fVal +
+      wM10 * mVal +
+      wM20 * m20Val +
+      wMarkov * mkVal +
+      wCycle * cycVal
+    ) * fatigueMult;
+
+    // Chuẩn hóa điểm hiển thị trực quan (thang 0 - 100)
+    const displayScore = Number(Math.min(99, Math.max(20, (rawTotal / 45) * 100)).toFixed(2));
+    const confidence = Math.min(96, Math.max(50, Math.round(55 + (rawTotal / 45) * 38)));
+
+    const cInfo = notes[n] || { note: 'Số hay ra', type: 'optimal' };
 
     ranked.push({
       number: n,
-      rawZ,
-      rawTotal: rawZ,
+      rawTotal,
       totalScore: displayScore,
       confidence,
-      freqScore: Number((freqNorm ? freqNorm[n] : 50).toFixed(1)),
-      momentumScore: Number((momentumNorm ? momentumNorm[n] : 50).toFixed(1)),
-      momentum20Score: Number((momentum20Norm ? momentum20Norm[n] : 50).toFixed(1)),
-      markovScore: Number((markovNorm ? markovNorm[n] : 50).toFixed(1)),
-      cycleScore: Number((cycleNorm ? cycleNorm[n] : 50).toFixed(1)),
+      freqScore: Number(fVal.toFixed(1)),
+      momentumScore: Number(mVal.toFixed(1)),
+      momentum20Score: Number(m20Val.toFixed(1)),
+      markovScore: Number(mkVal.toFixed(1)),
+      cycleScore: Number(cycVal.toFixed(1)),
       countAll: countAll[n],
       count20: count20 ? count20[n] : countAll[n],
       count10: count10[n],
@@ -421,105 +359,86 @@ export function scoreNumbers(subModels, weights = DEFAULT_WEIGHTS) {
     });
   }
 
-  ranked.sort((a, b) => b.rawZ - a.rawZ);
+  ranked.sort((a, b) => b.rawTotal - a.rawTotal);
   return ranked;
 }
 
 /**
- * Score all 3,160 pairs directly and build:
- * - Bậc 2 (VIP #1): Highest-scoring pair (Best-with-Best Rearrangement Inequality)
- * - Top 4 Disjoint Song Thủ: 4 non-overlapping pairs (8 distinct numbers) to maximize P(>=1 win)
- * - Bậc 3, 4, 5: Zone-diversified combinations from ranked numbers
+ * Build optimal Bậc 2, 3, 4, 5 combinations + Disjoint Top-4 Song Thủ Pairs from Top 8 Hot Numbers
  */
 export function buildLowTierPredictions(ranked, coMatrix, lastSet, totalDraws) {
   const scoreMap = new Map(ranked.map((r) => [r.number, r]));
-  const zByNum = new Float64Array(81);
-  for (const r of ranked) {
-    zByNum[r.number] = r.rawZ !== undefined ? r.rawZ : (r.totalScore - 55) / 16;
-  }
 
-  // Score all 3,160 pairs directly using single Z-scores + smoothed co-occurrence lift + zone diversity
-  const allPairs = [];
-  const safeDraws = Math.max(1, totalDraws || 1);
-  for (let a = 1; a <= 80; a++) {
-    const zA = Math.floor((a - 1) / 10);
-    for (let b = a + 1; b <= 80; b++) {
-      const zB = Math.floor((b - 1) / 10);
-      const coHits = coMatrix[a]?.[b] || 0;
-      const pCo = (coHits + 30 * BASE_PAIR_P) / (safeDraws + 30);
-      const coLift = Math.log(pCo / BASE_PAIR_P);
-      const diffZone = zA !== zB ? 1 : 0;
-      const pairScore = zByNum[a] + zByNum[b] + PAIR_CO_WEIGHT * coLift + PAIR_ZONE_WEIGHT * diffZone;
-      allPairs.push({ a, b, pairScore, coHits, coLift, diffZone });
-    }
-  }
-  allPairs.sort((x, y) => y.pairScore - x.pairScore);
+  // 1. Primary Bậc 2 (VIP #1): Bộ đôi dẫn đầu bảng điểm tổng hợp [Top 1, Top 2]
+  const bestBac2 = [ranked[0].number, ranked[1].number].sort((a, b) => a - b);
 
-  const vipPair = allPairs[0];
-  const bestBac2 = [vipPair.a, vipPair.b];
+  // 2. Dàn 4 Cặp Song Thủ Bậc 2 Độc Lập từ Top 8 số nóng nhất ([0,1], [2,3], [4,5], [6,7])
+  const pairConfigs = [
+    { idxA: 0, idxB: 1, label: 'Song Thủ VIP #1', desc: 'Bộ đôi dẫn đầu bảng điểm (Hạng #1 + #2)' },
+    { idxA: 2, idxB: 3, label: 'Song Thủ VIP #2', desc: 'Cặp song thủ phong độ cao (Hạng #3 + #4)' },
+    { idxA: 4, idxB: 5, label: 'Song Thủ VIP #3', desc: 'Cặp nhịp rơi vàng bọc lót (Hạng #5 + #6)' },
+    { idxA: 6, idxB: 7, label: 'Song Thủ VIP #4', desc: 'Cặp đối ứng đa vùng (Hạng #7 + #8)' }
+  ];
 
-  // Select Top 4 strictly DISJOINT pairs (8 distinct numbers) greedily Best-with-Best
   const pairs = [];
-  const usedNums = new Set();
-  for (const p of allPairs) {
-    if (usedNums.has(p.a) || usedNums.has(p.b)) continue;
-    usedNums.add(p.a);
-    usedNums.add(p.b);
+  for (const pc of pairConfigs) {
+    const a = ranked[pc.idxA];
+    const b = ranked[pc.idxB];
+    if (!a || !b) continue;
 
-    const bothInLast = lastSet && lastSet.has(p.a) && lastSet.has(p.b);
-    const anyInLast = lastSet && (lastSet.has(p.a) || lastSet.has(p.b));
-    const synergyScore = Number(Math.min(99, Math.max(30, 58 + p.pairScore * 11)).toFixed(2));
-    const liftPct = ((Math.exp(p.coLift) - 1) * 100).toFixed(0);
-    const liftTag = p.coLift >= 0 ? `+${liftPct}% lift` : `${liftPct}% lift`;
+    const sortedNums = [a.number, b.number].sort((x, y) => x - y);
+    const coHits = coMatrix[sortedNums[0]]?.[sortedNums[1]] || 0;
+    const bothInLast = lastSet && lastSet.has(sortedNums[0]) && lastSet.has(sortedNums[1]);
+    const coBonus = 1.0 + (totalDraws > 0 ? (coHits / totalDraws) * 1.5 : 0);
+    const avgScore = (a.totalScore + b.totalScore) / 2;
+    const synergyScore = Number((avgScore * coBonus).toFixed(2));
 
-    let pairNote = `Độc lập đa vùng · ${p.coHits} lần nổ chung (${liftTag})`;
+    let pairNote = `${pc.desc} · ${coHits} lần nổ chung`;
     if (bothInLast) {
-      pairNote = `Cặp rơi lại từ kỳ trước · ${p.coHits} lần chung`;
-    } else if (anyInLast && p.diffZone) {
-      pairNote = `1 bóng rơi + 1 kéo Markov · ${p.coHits} lần chung`;
-    } else if (!p.diffZone) {
-      pairNote = `Cùng đầu số hợp lực · ${p.coHits} lần chung`;
+      pairNote = `Cặp vừa cùng nổ kỳ trước · ${coHits} lần toàn mẫu`;
     }
 
     pairs.push({
-      numbers: [p.a, p.b],
+      label: pc.label,
+      numbers: sortedNums,
       synergyScore,
-      rawPairScore: Number(p.pairScore.toFixed(3)),
-      confidence: Math.min(96, Math.max(52, Math.round(60 + p.pairScore * 9))),
-      coOccurrences: p.coHits,
-      pairStatus: pairs.length === 0 ? 'hot' : 'optimal',
+      confidence: Math.min(96, Math.max(50, Math.round(52 + synergyScore * 0.44))),
+      coOccurrences: coHits,
+      pairStatus: 'hot',
       pairNote
     });
-
-    if (pairs.length >= 4) break;
   }
 
-  // Helper for zone-diversified selection for Bậc 3, 4, 5
-  const pickZoneDiversified = (count) => {
-    const out = [];
-    const seenZones = new Set();
-    for (const item of ranked) {
+  // Helper to pick multi-zone combinations starting from Top 1 anchor
+  function pickMultiZone(count) {
+    const out = [ranked[0].number];
+    const zSet = new Set([Math.floor((ranked[0].number - 1) / 10)]);
+    for (const item of ranked.slice(1)) {
       if (out.length >= count) break;
       const zone = Math.floor((item.number - 1) / 10);
-      if (!seenZones.has(zone)) {
+      if (!zSet.has(zone)) {
         out.push(item.number);
-        seenZones.add(zone);
+        zSet.add(zone);
       }
     }
-    for (const item of ranked) {
-      if (out.length >= count) break;
-      if (!out.includes(item.number)) out.push(item.number);
+    while (out.length < count) {
+      for (const item of ranked) {
+        if (!out.includes(item.number)) {
+          out.push(item.number);
+          break;
+        }
+      }
     }
     return out.sort((a, b) => a - b);
-  };
+  }
 
-  const bac3Nums = pickZoneDiversified(3);
-  const bac4Nums = pickZoneDiversified(4);
-  const bac5Nums = pickZoneDiversified(5);
+  const bac3Nums = pickMultiZone(3);
+  const bac4Nums = pickMultiZone(4);
+  const bac5Nums = pickMultiZone(5);
 
   function summarizeTier(tierLevel, nums, prizeInfo) {
     const avgConf = Math.round(
-      nums.reduce((acc, n) => acc + (scoreMap.get(n)?.confidence || 70), 0) / nums.length
+      nums.reduce((acc, n) => acc + (scoreMap.get(n)?.confidence || 75), 0) / nums.length
     );
     return {
       tier: tierLevel,
@@ -531,10 +450,10 @@ export function buildLowTierPredictions(ranked, coMatrix, lastSet, totalDraws) {
   }
 
   return {
-    bac2: summarizeTier(2, bestBac2, 'Trúng 2/2 nhận 90.000đ (x9 vốn · RTP lý thuyết 54.1%)'),
-    bac3: summarizeTier(3, bac3Nums, 'Trúng 2/3 nhận 20k · 3/3 nhận 400k (RTP lý thuyết 83.3%)'),
-    bac4: summarizeTier(4, bac4Nums, 'Trúng 2/4 hoàn 10k · 3/4 50k · 4/4 1.2M (RTP LT 79.6%)'),
-    bac5: summarizeTier(5, bac5Nums, 'Trúng 3/5 20k · 4/5 150k · 5/5 4.4M (RTP LT 63.3%)'),
+    bac2: summarizeTier(2, bestBac2, 'Trúng 2/2 số nhận 90.000đ (x9 vốn · Hòa vốn: 11.1% · Chuẩn Keno: 6.01%)'),
+    bac3: summarizeTier(3, bac3Nums, 'Trúng 2/3 nhận 20.000đ · Trúng 3/3 nhận 400.000đ'),
+    bac4: summarizeTier(4, bac4Nums, 'Trúng 2/4 hoàn vốn · 3/4 nhận 50k · 4/4 nhận 1.200.000đ'),
+    bac5: summarizeTier(5, bac5Nums, 'Trúng 3/5 nhận 20k · 4/5 nhận 150k · 5/5 nhận 4.400.000đ'),
     topPairsBac2: pairs
   };
 }
@@ -568,7 +487,7 @@ export function calculateKenoPrize(tier, hitCount) {
 }
 
 /**
- * Predict Parity (Chẵn/Lẻ) and Size (Lớn/Nhỏ) based on top numbers & equilibrium
+ * Predict Parity (Chẵn/Lẻ) and Size (Lớn/Nhỏ) based on high-frequency numbers & equilibrium
  */
 export function predictParityAndSize(draws, topRanked) {
   if (draws.length === 0) {
@@ -595,33 +514,39 @@ export function predictParityAndSize(draws, topRanked) {
   const lastDraw = draws[draws.length - 1];
 
   const evenSignal = (top10Even - 5) * 0.55 + (avgEvenAll - avgEven10) * 0.45;
-  let parityPick = 'Cân Bằng / Hòa (9–11 số)';
+  let parityPick = 'Hòa (9-11)';
   let parityConfidence = 68;
-  let parityReason = `Tỷ lệ Chẵn/Lẻ trên mẫu ${draws.length} kỳ cân bằng (${avgEvenAll.toFixed(1)} Chẵn : ${(20 - avgEvenAll).toFixed(1)} Lẻ).`;
+  let parityReason = `Mẫu ${draws.length} kỳ TB ${avgEvenAll.toFixed(1)} Chẵn/kỳ (10 kỳ gần nhất: ${avgEven10.toFixed(1)}).`;
 
   if (evenSignal >= 0.4) {
     parityPick = 'Nghiêng CHẴN (11–13+ số)';
     parityConfidence = Math.min(89, Math.round(67 + evenSignal * 10));
-    parityReason = `Top 10 số điểm cao có ${top10Even}/10 số Chẵn (kỳ trước ${lastDraw.evenCount} Chẵn - ${lastDraw.oddCount} Lẻ).`;
+    parityReason = `Top 10 số hay ra nhất có ${top10Even}/10 số Chẵn; mẫu ${draws.length} kỳ đang kéo nhịp về Chẵn (kỳ trước ${lastDraw.evenCount} Chẵn - ${lastDraw.oddCount} Lẻ).`;
   } else if (evenSignal <= -0.4) {
     parityPick = 'Nghiêng LẺ (11–13+ số)';
     parityConfidence = Math.min(89, Math.round(67 + Math.abs(evenSignal) * 10));
-    parityReason = `Top 10 số điểm cao có ${10 - top10Even}/10 số Lẻ (kỳ trước ${lastDraw.evenCount} Chẵn - ${lastDraw.oddCount} Lẻ).`;
+    parityReason = `Top 10 số hay ra nhất có ${10 - top10Even}/10 số Lẻ; mẫu ${draws.length} kỳ ưu tiên nhịp Lẻ (kỳ trước ${lastDraw.evenCount} Chẵn - ${lastDraw.oddCount} Lẻ).`;
+  } else {
+    parityPick = 'Cân Bằng / Hòa (9–11 số)';
+    parityReason = `Tỷ lệ Chẵn/Lẻ trên mẫu ${draws.length} kỳ rất cân bằng (${avgEvenAll.toFixed(1)} Chẵn : ${(20 - avgEvenAll).toFixed(1)} Lẻ).`;
   }
 
   const bigSignal = (top10Big - 5) * 0.55 + (avgBigAll - avgBig10) * 0.45;
-  let sizePick = 'Cân Bằng Lớn/Nhỏ (9–11 số)';
+  let sizePick = 'Hòa (9-11)';
   let sizeConfidence = 68;
-  let sizeReason = `Phân bổ Lớn/Nhỏ trên mẫu ${draws.length} kỳ ổn định (${avgBigAll.toFixed(1)} Lớn : ${(20 - avgBigAll).toFixed(1)} Nhỏ).`;
+  let sizeReason = `Mẫu ${draws.length} kỳ TB ${avgBigAll.toFixed(1)} Lớn/kỳ (10 kỳ gần nhất: ${avgBig10.toFixed(1)}).`;
 
   if (bigSignal >= 0.4) {
     sizePick = 'Nghiêng LỚN (41–80)';
     sizeConfidence = Math.min(89, Math.round(67 + bigSignal * 10));
-    sizeReason = `Top 10 số điểm cao có ${top10Big}/10 số Lớn (kỳ trước ${lastDraw.bigCount} Lớn - ${lastDraw.smallCount} Nhỏ).`;
+    sizeReason = `Top 10 số điểm cao nhất có ${top10Big}/10 số Lớn; mẫu ${draws.length} kỳ báo hiệu cầu Lớn (kỳ trước ${lastDraw.bigCount} Lớn - ${lastDraw.smallCount} Nhỏ).`;
   } else if (bigSignal <= -0.4) {
     sizePick = 'Nghiêng NHỎ (01–40)';
     sizeConfidence = Math.min(89, Math.round(67 + Math.abs(bigSignal) * 10));
-    sizeReason = `Top 10 số điểm cao có ${10 - top10Big}/10 số Nhỏ (kỳ trước ${lastDraw.bigCount} Lớn - ${lastDraw.smallCount} Nhỏ).`;
+    sizeReason = `Top 10 số điểm cao nhất có ${10 - top10Big}/10 số Nhỏ; mẫu ${draws.length} kỳ báo hiệu cầu Nhỏ (kỳ trước ${lastDraw.bigCount} Lớn - ${lastDraw.smallCount} Nhỏ).`;
+  } else {
+    sizePick = 'Cân Bằng Lớn/Nhỏ (9–11 số)';
+    sizeReason = `Phân bổ Lớn/Nhỏ trên mẫu ${draws.length} kỳ ổn định (${avgBigAll.toFixed(1)} Lớn : ${(20 - avgBigAll).toFixed(1)} Nhỏ).`;
   }
 
   return {
@@ -635,7 +560,7 @@ export function predictParityAndSize(draws, topRanked) {
 }
 
 /**
- * Run O(N) Incremental Walk-Forward Backtest across expanding history,
+ * Run O(N) Incremental Walk-Forward Backtest across expanding history using Hot-First Champion Engine,
  * tracking Win Rates AND RTP (%) for Bậc 2 VIP #1, Disjoint Top-4 Pairs, and Bậc 3–5.
  */
 export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
@@ -674,13 +599,64 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
     };
   }
 
-  const tracker = createIncrementalTracker();
+  const N = draws.length;
+  const countAll = new Int32Array(81);
+  const count120 = new Int32Array(81);
+  const count20 = new Int32Array(81);
+  const count10 = new Int32Array(81);
+  const count5 = new Int32Array(81);
+  const currentGap = new Int32Array(81);
+  const currentStreak = new Int32Array(81);
+  const coMatrix = Array.from({ length: 81 }, () => new Int32Array(81));
+  const trans1 = Array.from({ length: 81 }, () => new Int32Array(81));
+
+  function addDrawToTracker(idx) {
+    const nums = draws[idx].numbers;
+    const set = new Set(nums);
+    for (let i = 0; i < nums.length; i++) {
+      const a = nums[i];
+      countAll[a]++;
+      count120[a]++;
+      count20[a]++;
+      count10[a]++;
+      count5[a]++;
+      for (let j = i + 1; j < nums.length; j++) {
+        const b = nums[j];
+        coMatrix[a][b]++;
+        coMatrix[b][a]++;
+      }
+    }
+    if (idx >= 5) for (const x of draws[idx - 5].numbers) count5[x]--;
+    if (idx >= 10) for (const x of draws[idx - 10].numbers) count10[x]--;
+    if (idx >= 20) for (const x of draws[idx - 20].numbers) count20[x]--;
+    if (idx >= 120) for (const x of draws[idx - 120].numbers) count120[x]--;
+
+    if (idx > 0) {
+      const prevNums = draws[idx - 1].numbers;
+      for (const a of prevNums) {
+        for (const b of nums) {
+          trans1[a][b]++;
+        }
+      }
+    }
+
+    for (let n = 1; n <= 80; n++) {
+      if (set.has(n)) {
+        currentGap[n] = 0;
+        currentStreak[n]++;
+      } else {
+        currentGap[n] = idx === 0 ? 1 : currentGap[n] + 1;
+        currentStreak[n] = 0;
+      }
+    }
+  }
+
   for (let i = 0; i < MIN_WARMUP_DRAWS; i++) {
-    pushDrawToTracker(tracker, draws[i]);
+    addDrawToTracker(i);
   }
 
   const startIdx = MIN_WARMUP_DRAWS;
-  const evalCount = draws.length - startIdx;
+  const evalCount = N - startIdx;
   let weights = { ...initWeights };
   const modelHits = { freq: 0, momentum10: 0, markov: 0, cycle: 0 };
 
@@ -699,54 +675,99 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
 
   const backtestHistory = [];
 
-  for (let idx = startIdx; idx < draws.length; idx++) {
-    const sampleSizeUsed = tracker.totalDraws;
+  for (let idx = startIdx; idx < N; idx++) {
+    const sampleSizeUsed = idx;
     const actualDraw = draws[idx];
     const actualSet = new Set(actualDraw.numbers);
-    const lastSet = new Set(draws[idx - 1].numbers);
+    const lastNums = draws[idx - 1].numbers;
+    const lastSet = new Set(lastNums);
 
-    const sub = extractSubModelsFromTracker(tracker, false);
-    const ranked = scoreNumbers(sub, weights);
-    const lowTiers = buildLowTierPredictions(ranked, sub.coMatrix, lastSet, sampleSizeUsed);
+    const rawFreq = new Array(81).fill(0);
+    const rawMomentum = new Array(81).fill(0);
+    const rawMomentum20 = new Array(81).fill(0);
+    const rawMarkov = new Array(81).fill(0);
+    const rawCycle = new Array(81).fill(0);
 
-    const top8Hits = (zArr) => {
-      const indices = Array.from({ length: 80 }, (_, i) => i + 1);
-      indices.sort((a, b) => zArr[b] - zArr[a]);
-      let hits = 0;
-      for (let i = 0; i < 8; i++) {
-        if (actualSet.has(indices[i])) hits++;
+    for (let n = 1; n <= 80; n++) {
+      const fAll = computeEffectiveFreq(countAll[n], count120[n], sampleSizeUsed);
+      const f20 = count20[n] / Math.min(20, sampleSizeUsed);
+      const f10 = count10[n] / Math.min(10, sampleSizeUsed);
+
+      let mkHits = 0;
+      for (const a of lastNums) {
+        mkHits += trans1[a][n];
       }
-      return hits;
+      const mNorm = mkHits / Math.max(1, sampleSizeUsed * 20);
+
+      rawFreq[n] = fAll * 100;
+      rawMomentum[n] = f10 * 100;
+      rawMomentum20[n] = f20 * 100;
+      rawMarkov[n] = mNorm * 100;
+      rawCycle[n] = computeCycleScore(currentGap[n], currentStreak[n]);
+    }
+
+    const freqNorm = normalize80(rawFreq);
+    const momentumNorm = normalize80(rawMomentum);
+    const markovNorm = normalize80(rawMarkov);
+    const cycleNorm = normalize80(rawCycle);
+
+    const sub = {
+      rawFreq,
+      rawMomentum,
+      rawMomentum20,
+      rawMarkov,
+      rawCycle,
+      freqNorm,
+      momentumNorm,
+      markovNorm,
+      cycleNorm,
+      countAll,
+      count20,
+      count10,
+      count5,
+      currentGap,
+      currentStreak
     };
 
-    modelHits.freq += top8Hits(sub.zFreq);
-    modelHits.momentum10 += top8Hits(sub.zMomentum10);
-    modelHits.markov += top8Hits(sub.zMarkov);
-    modelHits.cycle += top8Hits(sub.zCycle);
+    const ranked = scoreNumbers(sub, weights);
+    const lowTiers = buildLowTierPredictions(ranked, coMatrix, lastSet, sampleSizeUsed);
 
-    // Regularized online predictive Z-correlation weight adaptation with mean-reversion toward balanced prior
+    const topByModel = (arr) => {
+      const indices = Array.from({ length: 80 }, (_, i) => i + 1);
+      indices.sort((a, b) => arr[b] - arr[a]);
+      return indices.slice(0, 8);
+    };
+
+    const fHits = topByModel(freqNorm).filter((n) => actualSet.has(n)).length;
+    const mHits = topByModel(momentumNorm).filter((n) => actualSet.has(n)).length;
+    const mkHits = topByModel(markovNorm).filter((n) => actualSet.has(n)).length;
+    const cycHits = topByModel(cycleNorm).filter((n) => actualSet.has(n)).length;
+
+    modelHits.freq += fHits;
+    modelHits.momentum10 += mHits;
+    modelHits.markov += mkHits;
+    modelHits.cycle += cycHits;
+
+    // Multiplicative Weights Update (Hot-First Champion Learning)
     if (isAdaptive) {
-      const lr = 0.012;
-      const blend = 0.02;
-      const zCorr = (zArr) => {
-        let s = 0;
-        for (let b = 1; b <= 80; b++) {
-          s += zArr[b] * (actualSet.has(b) ? 0.75 : -0.25);
-        }
-        return s / 20;
-      };
-      weights.freq = Math.max(0.08, Math.min(0.35, (1 - blend) * weights.freq * Math.exp(lr * zCorr(sub.zFreq)) + blend * initWeights.freq));
-      weights.momentum10 = Math.max(0.04, Math.min(0.25, (1 - blend) * weights.momentum10 * Math.exp(lr * zCorr(sub.zMomentum10)) + blend * initWeights.momentum10));
-      weights.momentum20 = Math.max(0.04, Math.min(0.25, (1 - blend) * weights.momentum20 * Math.exp(lr * zCorr(sub.zMomentum20)) + blend * initWeights.momentum20));
-      weights.markov = Math.max(0.20, Math.min(0.60, (1 - blend) * weights.markov * Math.exp(lr * zCorr(sub.zMarkov)) + blend * initWeights.markov));
-      weights.cycle = Math.max(0.08, Math.min(0.45, (1 - blend) * weights.cycle * Math.exp(lr * zCorr(sub.zCycle)) + blend * initWeights.cycle));
+      const lr = 0.03;
+      weights.freq *= Math.exp(lr * (fHits - 2.0));
+      weights.momentum10 *= Math.exp(lr * (mHits - 2.0));
+      weights.markov *= Math.exp(lr * (mkHits - 2.0));
+      weights.cycle *= Math.exp(lr * (cycHits - 2.0));
 
-      const sumW = weights.freq + weights.momentum10 + weights.momentum20 + weights.markov + weights.cycle;
-      weights.freq /= sumW;
-      weights.momentum10 /= sumW;
-      weights.momentum20 /= sumW;
-      weights.markov /= sumW;
-      weights.cycle /= sumW;
+      const sumW = weights.freq + weights.momentum10 + (weights.momentum20 || 0.20) + weights.markov + weights.cycle;
+      weights.freq = Math.max(0.10, Math.min(0.28, weights.freq / sumW));
+      weights.momentum10 = Math.max(0.20, Math.min(0.38, weights.momentum10 / sumW));
+      weights.momentum20 = 0.20;
+      weights.markov = Math.max(0.10, Math.min(0.25, weights.markov / sumW));
+      weights.cycle = Math.max(0.10, Math.min(0.25, weights.cycle / sumW));
+      const sumW2 = weights.freq + weights.momentum10 + weights.momentum20 + weights.markov + weights.cycle;
+      weights.freq = Number((weights.freq / sumW2).toFixed(3));
+      weights.momentum10 = Number((weights.momentum10 / sumW2).toFixed(3));
+      weights.momentum20 = Number((weights.momentum20 / sumW2).toFixed(3));
+      weights.markov = Number((weights.markov / sumW2).toFixed(3));
+      weights.cycle = Number((1 - weights.freq - weights.momentum10 - weights.momentum20 - weights.markov).toFixed(3));
     }
 
     const hitBac2 = lowTiers.bac2.numbers.filter((n) => actualSet.has(n));
@@ -825,7 +846,7 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
       }
     });
 
-    pushDrawToTracker(tracker, actualDraw);
+    addDrawToTracker(idx);
   }
 
   // Last-100 draw window stats (newest 100 in chronological order = last 100 pushed)
@@ -847,21 +868,8 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
   const singleTicketCost = evalCount * 10000;
   const top4TicketCost = evalCount * 40000;
 
-  const wFreq = Number(weights.freq.toFixed(3));
-  const wM10 = Number(weights.momentum10.toFixed(3));
-  const wM20 = Number(weights.momentum20.toFixed(3));
-  const wMarkov = Number(weights.markov.toFixed(3));
-  const wCycle = Number(Math.max(0, 1 - wFreq - wM10 - wM20 - wMarkov).toFixed(3));
-  const learnedWeights = {
-    freq: wFreq,
-    momentum10: wM10,
-    momentum20: wM20,
-    markov: wMarkov,
-    cycle: wCycle
-  };
-
   return {
-    learnedWeights,
+    learnedWeights: weights,
     modelAccuracy,
     backtestHistory: backtestHistory.reverse(),
     summary: {
@@ -900,8 +908,8 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
 
 /**
  * Full pipeline: Given all accumulated historical draws (sorted oldest -> newest, size N),
- * learns adaptive weights (or runs mode-specific walk-forward backtest),
- * scores all 3,160 pairs for Bậc 2 & Disjoint Top-4, and returns the complete analytics payload.
+ * learns adaptive weights, prioritizes high-frequency numbers & champion pairs,
+ * and returns the complete analytics payload.
  */
 export function analyzeAndPredictNextDraw(draws, customMode = 'adaptive') {
   const mode = MODE_WEIGHTS[customMode] ? customMode : 'adaptive';

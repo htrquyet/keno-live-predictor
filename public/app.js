@@ -1,821 +1,1007 @@
-let appState = null;
-let soundEnabled = true;
-let localCountdownSec = 0;
-let awaitingResultFlag = false;
-let sharedAudioCtx = null;
+/* Vietlott Bingo18 Live Analytics, Calculator & Point-of-Fall Predictor */
 
-const pad2 = (n) => String(n).padStart(2, '0');
-const formatVnd = (n) => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
+const STORAGE_CACHE_KEY = 'bingo18_cached_draws_v1';
+const DICE_DOTS = { 1: '⚀', 2: '⚁', 3: '⚂', 4: '⚃', 5: '⚄', 6: '⚅' };
 
-function unlockAudioContext() {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return null;
-    if (!sharedAudioCtx) {
-      sharedAudioCtx = new AudioCtx();
+const SUM_PAYOUT_MAP = {
+  3: { ways: 1, prize10k: 1200000, mult: 120 },
+  4: { ways: 3, prize10k: 400000, mult: 40 },
+  5: { ways: 6, prize10k: 200000, mult: 20 },
+  6: { ways: 10, prize10k: 120000, mult: 12 },
+  7: { ways: 15, prize10k: 80000, mult: 8 },
+  8: { ways: 21, prize10k: 55000, mult: 5.5 },
+  9: { ways: 25, prize10k: 47000, mult: 4.7 },
+  10: { ways: 27, prize10k: 44000, mult: 4.4 },
+  11: { ways: 27, prize10k: 44000, mult: 4.4 },
+  12: { ways: 25, prize10k: 47000, mult: 4.7 },
+  13: { ways: 21, prize10k: 55000, mult: 5.5 },
+  14: { ways: 15, prize10k: 80000, mult: 8 },
+  15: { ways: 10, prize10k: 120000, mult: 12 },
+  16: { ways: 6, prize10k: 200000, mult: 20 },
+  17: { ways: 3, prize10k: 400000, mult: 40 },
+  18: { ways: 1, prize10k: 1200000, mult: 120 }
+};
+
+// Precompute all 216 (6x6x6) outcomes for exact theoretical calculator math
+const ALL_216_OUTCOMES = [];
+for (let a = 1; a <= 6; a++) {
+  for (let b = 1; b <= 6; b++) {
+    for (let c = 1; c <= 6; c++) {
+      const sum = a + b + c;
+      const sizeType = sum >= 12 ? 'BIG' : sum <= 9 ? 'SMALL' : 'TIE';
+      ALL_216_OUTCOMES.push({ numbers: [a, b, c], sum, sizeType });
     }
-    if (sharedAudioCtx.state === 'suspended') {
-      sharedAudioCtx.resume().catch(() => {});
-    }
-    return sharedAudioCtx;
-  } catch {
-    return null;
   }
 }
 
-async function fetchJson(url, options = {}) {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    let errDetail = `HTTP ${res.status}`;
-    try {
-      const text = await res.text();
-      if (text) errDetail += `: ${text.slice(0, 120)}`;
-    } catch {
-      // Ignore response read failure
-    }
-    throw new Error(errDetail);
+let appState = {
+  schedule: null,
+  recentDraws: [],
+  syncDraws: [],
+  analysis: null,
+  lastSeenDrawId: null,
+  soundEnabled: true,
+  countdownTimer: null,
+  lastZeroTriggerMs: 0,
+  calc: {
+    playType: 'SINGLE',
+    selectedOptions: new Set(['1']),
+    stake: 10000,
+    range: 100
   }
-  return res.json();
+};
+
+function formatVnd(amount) {
+  return Number(amount || 0).toLocaleString('vi-VN') + 'đ';
 }
 
 function playNotificationChime() {
-  if (!soundEnabled) return;
+  if (!appState.soundEnabled) return;
   try {
-    const ctx = unlockAudioContext();
-    if (!ctx || ctx.state === 'suspended') return;
-    const notes = [523.25, 659.25, 783.99, 1046.5];
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const notes = [587.33, 783.99, 1046.5];
     notes.forEach((freq, idx) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'triangle';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.12, ctx.currentTime + idx * 0.11);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.11 + 0.35);
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.11);
+      gain.gain.setValueAtTime(0.14, ctx.currentTime + idx * 0.11);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.11 + 0.32);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(ctx.currentTime + idx * 0.11);
-      osc.stop(ctx.currentTime + idx * 0.11 + 0.36);
+      osc.stop(ctx.currentTime + idx * 0.11 + 0.34);
     });
   } catch {
-    // Ignore audio context restriction before user gesture
+    // Ignore audio context restriction
   }
 }
 
-function showToast(message) {
-  const container = document.getElementById('toastContainer');
-  if (!container) return;
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.innerHTML = message;
-  container.appendChild(el);
-  setTimeout(() => {
-    el.remove();
-  }, 7000);
-}
-
-function renderPollStatus(info) {
-  const dot = document.getElementById('pulseDot');
-  const txt = document.getElementById('pollStatusText');
-  if (dot && txt) {
-    if (info.isPolling) {
-      dot.classList.add('polling');
-    } else {
-      dot.classList.remove('polling');
-    }
-    if (info.lastPollStatus) {
-      txt.textContent = info.lastPollStatus;
-    }
-  }
-
-  // Keep client timer and awaiting state synced even when polls find 0 new draws
-  if (info.schedule) {
-    const s = info.schedule;
-    awaitingResultFlag = Boolean(s.awaitingNewResult);
-    const nextTimeEl = document.getElementById('headerNextDrawTime');
-    if (nextTimeEl) {
-      nextTimeEl.textContent = `Giờ quay: ${s.expectedDrawTimeStr}`;
-    }
-    if (
-      !s.awaitingNewResult &&
-      (localCountdownSec <= 0 || Math.abs(localCountdownSec - s.secondsUntilNextSchedule) > 3)
-    ) {
-      localCountdownSec = s.secondsUntilNextSchedule;
-    }
-    renderCountdownUI();
-  }
-}
-
-function renderCountdownUI() {
-  const timerEl = document.getElementById('countdownTimer');
-  const boxEl = document.getElementById('countdownBox');
-  const subEl = document.getElementById('countdownSubStatus');
-  if (!timerEl || !boxEl || !subEl) return;
-
-  const mins = Math.floor(localCountdownSec / 60);
-  const secs = localCountdownSec % 60;
-  timerEl.textContent = `${pad2(mins)}:${pad2(secs)}`;
-
-  if (awaitingResultFlag || localCountdownSec <= 5) {
-    boxEl.classList.add('awaiting-hot');
-    subEl.innerHTML = `<span style="color:#fbbf24;font-weight:700;">⚡ Đang quét kết quả kỳ mới (4s/lần)...</span>`;
-  } else {
-    boxEl.classList.remove('awaiting-hot');
-    subEl.textContent = `Chu kỳ 8 phút/kỳ · Tự động tính ngay khi nổ`;
-  }
-}
-
-const LOCAL_DRAW_CACHE_KEY = 'keno_draws_cache_v1';
-
-function loadClientDrawCache() {
+function saveDrawsToLocalCache(draws) {
+  if (!Array.isArray(draws) || draws.length === 0) return;
   try {
-    const raw = localStorage.getItem(LOCAL_DRAW_CACHE_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveClientDrawCache(incomingDraws) {
-  if (!Array.isArray(incomingDraws) || incomingDraws.length === 0) return;
-  try {
-    const existing = loadClientDrawCache();
-    const map = new Map();
-    for (const d of existing) {
-      if (d && d.drawNumber) map.set(d.drawNumber, d);
-    }
-    let changed = false;
-    for (const d of incomingDraws) {
-      if (d && d.drawNumber && !map.has(d.drawNumber)) {
-        map.set(d.drawNumber, d);
-        changed = true;
-      }
-    }
-    if (changed) {
-      const sorted = [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber).slice(-400);
-      localStorage.setItem(LOCAL_DRAW_CACHE_KEY, JSON.stringify(sorted));
-    }
+    const compact = draws.slice(-800).map((d) => ({
+      drawId: d.drawId,
+      drawNumber: d.drawNumber,
+      date: d.date,
+      time: d.time,
+      numbers: d.numbers,
+      source: d.source || 'cache'
+    }));
+    localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(compact));
   } catch {
     // Ignore storage quota errors
   }
 }
 
-async function syncCachedDrawsToServerIfNeeded(serverState) {
+async function syncLocalCacheToServerIfNeeded(serverDrawCount) {
   try {
-    const serverLatestNum = serverState?.analysis?.latestDraw?.drawNumber || 0;
-    const cached = loadClientDrawCache();
-    const newerDraws = cached.filter((d) => d && d.drawNumber > serverLatestNum);
-    if (newerDraws.length === 0) return;
-
-    const synced = await fetchJson('/api/client-sync', {
+    const raw = localStorage.getItem(STORAGE_CACHE_KEY);
+    if (!raw) return;
+    const cached = JSON.parse(raw);
+    if (!Array.isArray(cached) || cached.length <= serverDrawCount) return;
+    await fetch('/api/client-sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ draws: newerDraws })
+      body: JSON.stringify({ draws: cached })
     });
-    if (synced && synced.syncAdded > 0) {
-      renderAll(synced);
-    }
   } catch {
-    // Ignore background client-sync error
+    // Ignore sync error
   }
 }
 
-function renderAll(state) {
-  appState = state;
-  const { schedule, analysis, recentDraws, syncDraws } = state;
-  if (!analysis) return;
-  saveClientDrawCache(syncDraws || recentDraws || []);
+/* ==========================================================================
+   1. RENDER LATEST DRAW, WINNING DOORS & ROADMAP
+   ========================================================================== */
+function computeWinningDoorsForDraw(draw) {
+  const [a, b, c] = draw.numbers;
+  const counts = [0, 0, 0, 0, 0, 0, 0];
+  counts[a]++;
+  counts[b]++;
+  counts[c]++;
 
-  // Sync schedule & countdown
-  localCountdownSec = schedule?.secondsUntilNextSchedule ?? 0;
-  awaitingResultFlag = Boolean(schedule?.awaitingNewResult);
-  document.getElementById('headerNextDrawId').textContent = `#${analysis.nextDrawId}`;
-  document.getElementById('headerNextDrawTime').textContent = schedule
-    ? `Giờ quay: ${schedule.expectedDrawTimeStr}`
-    : '--:--';
-  document.getElementById('predNextDrawId').textContent = `#${analysis.nextDrawId}`;
-  const sampleSizeEl = document.getElementById('predSampleSize');
-  if (sampleSizeEl) {
-    sampleSizeEl.textContent = analysis.totalHistoricalDraws;
-  }
-  renderPollStatus(state);
-  renderCountdownUI();
+  const doors = [];
 
-  // Sync strategy dropdown
-  const selectEl = document.getElementById('strategySelect');
-  if (selectEl && analysis.mode) {
-    selectEl.value = analysis.mode;
-  }
-
-  // 1. Latest Draw Result
-  const latest = analysis.latestDraw;
-  const latestBacktest = analysis.backtestHistory?.[0] || null;
-
-  // Build map of numbers predicted across all tiers in the matching backtest draw
-  const predTiersMap = new Map();
-  if (latest && latestBacktest && latestBacktest.drawId === latest.drawId) {
-    const addNums = (tierObj, label) => {
-      for (const num of tierObj?.predicted || []) {
-        if (!predTiersMap.has(num)) predTiersMap.set(num, []);
-        predTiersMap.get(num).push(label);
-      }
-    };
-    addNums(latestBacktest.bac2, 'Bậc 2');
-    addNums(latestBacktest.bac3, 'Bậc 3');
-    addNums(latestBacktest.bac4, 'Bậc 4');
-    addNums(latestBacktest.bac5, 'Bậc 5');
-  }
-
-  if (latest) {
-    document.getElementById('latestDrawMeta').innerHTML =
-      `Kỳ quay <strong>#${latest.drawId}</strong> · Lúc <strong>${latest.time}</strong> ngày ${latest.date} · Nguồn: ${latest.source}`;
-
-    document.getElementById('latestDrawBadges').innerHTML = `
-      <span class="stat-pill even">Chẵn: ${latest.evenCount}</span>
-      <span class="stat-pill odd">Lẻ: ${latest.oddCount}</span>
-      <span class="stat-pill big">Lớn: ${latest.bigCount}</span>
-      <span class="stat-pill small">Nhỏ: ${latest.smallCount}</span>
-      <span class="stat-pill">Tổng: ${latest.sum}</span>
-    `;
-
-    const ballsGrid = document.getElementById('latestBallsGrid');
-    ballsGrid.innerHTML = latest.numbers
-      .map((n) => {
-        const tiers = predTiersMap.get(n);
-        const isHit = Boolean(tiers && tiers.length > 0);
-        const titleText = isHit
-          ? `🎯 TRÚNG! Số nằm trong dự đoán ${tiers.join(' & ')} kỳ #${latest.drawId}`
-          : `Số #${pad2(n)} nổ kỳ #${latest.drawId}`;
-        return `<div class="keno-ball ${isHit ? 'hit-match' : ''}" title="${titleText}">${pad2(n)}</div>`;
-      })
-      .join('');
-
-    const hitBanner = document.getElementById('latestHitBanner');
-    if (latestBacktest && latestBacktest.drawId === latest.drawId) {
-      const b2 = latestBacktest.bac2;
-      const t4 = latestBacktest.top4Pairs;
-      const b3 = latestBacktest.bac3;
-      const b4 = latestBacktest.bac4;
-      const b5 = latestBacktest.bac5;
-      const singlePrize = (b2.prize || 0) + (b3.prize || 0) + (b4.prize || 0) + (b5.prize || 0);
-      const t4Prize = t4?.prize || 0;
-
-      const chipB2 = `<span class="${b2.prize > 0 ? 'prize-win' : 'stat-pill'}">VIP #1: <strong>${b2.hitCount}/2</strong>${b2.prize > 0 ? ' 🏆' : ''}</span>`;
-      const chipT4 = t4
-        ? `<span class="${t4.wonAny ? 'prize-win' : 'stat-pill'}">Dàn 4 cặp: <strong>${t4.winCount}/4 nổ</strong>${t4.wonAny ? ' 🏆' : ''}</span>`
-        : '';
-      const chipB3 = `<span class="${b3.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 3: <strong>${b3.hitCount}/3</strong>${b3.prize > 0 ? ' 🏆' : ''}</span>`;
-      const chipB4 = `<span class="${b4.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 4: <strong>${b4.hitCount}/4</strong>${b4.prize > 0 ? ' 🏆' : ''}</span>`;
-      const chipB5 = `<span class="${b5.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 5: <strong>${b5.hitCount}/5</strong>${b5.prize > 0 ? ' 🏆' : ''}</span>`;
-      const psBt = latestBacktest.paritySize;
-      const chipPS = psBt
-        ? `<span class="${psBt.parityCoverWon ? 'prize-win' : 'stat-pill'}">Chẵn/Lẻ: <strong>${psBt.parityExactWon ? 'Trúng chính diện' : psBt.parityCoverWon ? 'Nổ Hòa 10-10' : 'Trượt'}</strong>${psBt.parityCoverWon ? ' 🏆' : ''}</span> <span class="${psBt.sizeCoverWon ? 'prize-win' : 'stat-pill'}">Lớn/Nhỏ: <strong>${psBt.sizeExactWon ? 'Trúng chính diện' : psBt.sizeCoverWon ? 'Nổ Hòa 10-10' : 'Trượt'}</strong>${psBt.sizeCoverWon ? ' 🏆' : ''}</span>`
-        : '';
-
-      hitBanner.innerHTML = `
-        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:100%;">
-          <span>🎯 Đối soát kỳ <strong>#${latest.drawId}</strong> (Mẫu: <strong>${latestBacktest.sampleSizeUsed || analysis.totalHistoricalDraws - 1} kỳ</strong>):</span>
-          <div style="display:inline-flex;gap:6px;flex-wrap:wrap;">
-            ${chipB2} ${chipT4} ${chipB3} ${chipB4} ${chipB5} ${chipPS}
-          </div>
-          ${
-            t4Prize > 0 || singlePrize > 0
-              ? `<span class="prize-win" style="margin-left:auto;">🏆 ${t4Prize > 0 ? `Dàn 4 cặp +${formatVnd(t4Prize)}` : ''}${t4Prize > 0 && singlePrize > 0 ? ' · ' : ''}${singlePrize > 0 ? `Đơn +${formatVnd(singlePrize)}` : ''}</span>`
-              : `<span style="color:#94a3b8;margin-left:auto;">Đã tích lũy thành <strong>${analysis.totalHistoricalDraws} kỳ</strong></span>`
-          }
-        </div>
-      `;
-    } else {
-      hitBanner.innerHTML = `<span>Dữ liệu kỳ #${latest.drawId} đã được gộp vào mẫu <strong>${analysis.totalHistoricalDraws} kỳ</strong> để tính kỳ #${analysis.nextDrawId}</span>`;
+  // 1. Một số (1..6)
+  for (let f = 1; f <= 6; f++) {
+    if (counts[f] > 0) {
+      const prz = counts[f] === 1 ? 12000 : counts[f] === 2 ? 20000 : 30000;
+      doors.push({
+        name: `Một số [Mặt ${f}]`,
+        val: `Nổ ${counts[f]} nháy`,
+        prize: formatVnd(prz)
+      });
     }
   }
 
-  // 2. 80-Ball Interactive Matrix
-  const drawnSet = new Set(latest ? latest.numbers : []);
-  const nextPredTiersMap = new Map();
-  if (analysis.lowTiers) {
-    const addNext = (tierObj, label) => {
-      for (const num of tierObj?.numbers || []) {
-        if (!nextPredTiersMap.has(num)) nextPredTiersMap.set(num, []);
-        nextPredTiersMap.get(num).push(label);
-      }
-    };
-    addNext(analysis.lowTiers.bac2, 'Bậc 2');
-    addNext(analysis.lowTiers.bac3, 'Bậc 3');
-    addNext(analysis.lowTiers.bac4, 'Bậc 4');
-    addNext(analysis.lowTiers.bac5, 'Bậc 5');
+  // 2. Lớn / Hòa / Nhỏ
+  if (draw.sizeType === 'BIG') {
+    doors.push({ name: 'Cửa Lớn (12–18)', val: `Tổng ${draw.sum}`, prize: '15.000đ (x1.5)' });
+  } else if (draw.sizeType === 'TIE') {
+    doors.push({ name: 'Cửa Hòa (10–11)', val: `Tổng ${draw.sum}`, prize: '20.000đ (x2.0)' });
+  } else {
+    doors.push({ name: 'Cửa Nhỏ (3–9)', val: `Tổng ${draw.sum}`, prize: '15.000đ (x1.5)' });
   }
-  const board80Grid = document.getElementById('board80Grid');
 
-  board80Grid.innerHTML = (analysis.board80 || [])
-    .map((item) => {
-      const n = item.number;
-      const inDrawn = drawnSet.has(n);
-      const nextTiers = nextPredTiersMap.get(n);
-      const inPred = Boolean(nextTiers && nextTiers.length > 0);
-      let cls = 'cell-80';
-      if (inDrawn && inPred) cls += ' is-both';
-      else if (inPred) cls += ' is-predicted';
-      else if (inDrawn) cls += ' is-drawn';
+  // 3. Cộng tổng
+  const sumMeta = SUM_PAYOUT_MAP[draw.sum];
+  if (sumMeta) {
+    doors.push({
+      name: `Cộng tổng [${draw.sum}]`,
+      val: `Tỷ lệ x${sumMeta.mult}`,
+      prize: formatVnd(sumMeta.prize10k)
+    });
+  }
 
-      const tooltip = `Số ${pad2(n)} | Điểm AI: ${item.totalScore} (${item.confidence}%) | Về ${
-        item.count20
-      }/20 kỳ | Gan: ${item.gap} kỳ | Bệt: ${item.streak} kỳ${inPred ? ' | Dự đoán: ' + nextTiers.join(', ') : ''}`;
-      return `<div class="${cls}" title="${tooltip}">${pad2(n)}</div>`;
-    })
-    .join('');
+  // 4. Hai số trùng & Ba số trùng
+  for (let f = 1; f <= 6; f++) {
+    if (counts[f] >= 2) {
+      doors.push({
+        name: `Hai số trùng [${f}-${f}]`,
+        val: counts[f] === 3 ? 'Nổ Bão 3 số' : 'Nổ Đôi trùng',
+        prize: '75.000đ (x7.5)'
+      });
+    }
+    if (counts[f] === 3) {
+      doors.push({
+        name: `Bão cụ thể [${f}${f}${f}]`,
+        val: 'Ba số trùng',
+        prize: '1.200.000đ (x120)'
+      });
+      doors.push({
+        name: 'Bão bất kỳ',
+        val: '111..666',
+        prize: '200.000đ (x20)'
+      });
+    }
+  }
 
-  // 3. VIP Low Tiers (Bậc 2, Bậc 3, Bậc 4, Bậc 5)
-  const tiers = [
-    analysis.lowTiers.bac2,
-    analysis.lowTiers.bac3,
-    analysis.lowTiers.bac4,
-    analysis.lowTiers.bac5
-  ];
+  return doors;
+}
 
-  document.getElementById('tiersGrid').innerHTML = tiers
+function renderLatestDraw(analysis) {
+  const latest = analysis?.latestDraw;
+  if (!latest) return;
+
+  document.getElementById('latestDrawId').textContent = `Kỳ #${latest.drawId}`;
+  document.getElementById('latestDrawMeta').textContent = `${latest.date} · ${latest.time}`;
+  document.getElementById('sampleCountBadge').textContent = `Mẫu phân tích: ${analysis.totalHistoricalDraws} kỳ`;
+  document.getElementById('latestSlotBadge').textContent = `Kỳ thứ ${latest.slotIndex || '--'}/159 trong ngày`;
+
+  // 3 Dice cards
+  const ballsGrid = document.getElementById('latestBallsGrid');
+  ballsGrid.innerHTML = latest.numbers
     .map(
-      (t) => `
-      <div class="tier-card tier-${t.tier}">
-        <div class="tier-top">
-          <span class="tier-name">💎 VIP ${t.label.toUpperCase()} (${t.numbers.length} SỐ)</span>
-          <span class="tier-conf">Độ tin cậy: ${t.confidence}%</span>
-        </div>
-        <div class="tier-balls">
-          ${t.numbers.map((num) => `<div class="pred-ball">${pad2(num)}</div>`).join('')}
-        </div>
-        <div class="tier-prize-note">${t.prizeInfo}</div>
+      (n) => `
+      <div class="dice-card face-${n}">
+        <span>${n}</span>
+        <span class="dice-dots">${DICE_DOTS[n] || ''}</span>
       </div>
     `
     )
     .join('');
 
-  // 4. Top 4 Synergy Pairs for Bậc 2
-  const topPairs = analysis.lowTiers.topPairsBac2 || [];
-  document.getElementById('topPairsGrid').innerHTML = topPairs
+  // Sum Orb
+  const sumOrb = document.getElementById('latestSumOrb');
+  const sumVal = document.getElementById('latestSumValue');
+  sumVal.textContent = latest.sum;
+  sumOrb.className = 'sum-orb ' + (latest.sizeType === 'BIG' ? 'sum-big' : latest.sizeType === 'SMALL' ? 'sum-small' : 'sum-tie');
+
+  // Classification Badges
+  const badgesRow = document.getElementById('latestBadgesRow');
+  const sizeBadgeClass = latest.sizeType === 'BIG' ? 'badge-big' : latest.sizeType === 'SMALL' ? 'badge-small' : 'badge-tie';
+  const matchBadgeClass = latest.matchType === 'TRIPLE' ? 'badge-triple' : latest.matchType === 'DOUBLE' ? 'badge-double' : '';
+  const sumMeta = SUM_PAYOUT_MAP[latest.sum];
+
+  badgesRow.innerHTML = `
+    <span class="result-badge ${sizeBadgeClass}">🎯 ${latest.sizeLabel}</span>
+    <span class="result-badge">⚖️ ${latest.parityLabel} (${latest.sum})</span>
+    <span class="result-badge ${matchBadgeClass}">🎲 ${latest.matchLabel}</span>
+    <span class="result-badge">💰 Thưởng Tổng ${latest.sum}: ${sumMeta ? formatVnd(sumMeta.prize10k) : '--'}/10k</span>
+  `;
+
+  // Winning Doors Grid
+  const doors = computeWinningDoorsForDraw(latest);
+  document.getElementById('latestWinningDoorsGrid').innerHTML = doors
     .map(
-      (p, i) => `
-      <div class="pair-box">
-        <div style="font-size:11px;font-weight:700;color:#38bdf8;">Cặp Song Thủ #${i + 1} (${p.confidence}%)</div>
-        <div class="pair-nums">
-          <div class="pair-ball">${pad2(p.numbers[0])}</div>
-          <div class="pair-ball">${pad2(p.numbers[1])}</div>
-        </div>
-        <div class="pair-meta">Điểm hợp lực: <strong>${p.synergyScore}</strong></div>
-        <div class="pair-status-tag ${p.pairStatus || 'due'}">${p.pairNote || 'Đang vào điểm rơi chu kỳ'}</div>
+      (d) => `
+      <div class="door-item">
+        <span class="door-name">${d.name}</span>
+        <span class="door-val">${d.val}</span>
+        <span class="door-prize">${d.prize}</span>
       </div>
     `
     )
     .join('');
 
-  // 5. Parity & Size Prediction (Chẵn/Lẻ/Hòa & Lớn/Nhỏ/Hòa)
-  const ps = analysis.parityAndSize;
-  const btSumForPs = analysis.backtestSummary || {};
-  document.getElementById('paritySizeGrid').innerHTML = `
-    <div class="ps-box">
-      <div class="ps-header">
-        <span>☯️ CẦU CHẴN / LẺ / HÒA KỲ #${analysis.nextDrawId}</span>
-        <span style="color:#34d399;font-weight:700;">Tin cậy: ${ps.parityConfidence}%</span>
+  // Instant Reconcile Banner for Latest Draw
+  const btLatest = analysis.backtestHistory && analysis.backtestHistory[0];
+  const reconcileBanner = document.getElementById('latestReconcileBanner');
+  if (btLatest && btLatest.drawId === latest.drawId) {
+    const parts = [];
+    if (btLatest.single1.won) {
+      parts.push(`✅ Độc thủ [${btLatest.single1.predicted}] NỔ ${btLatest.single1.appearCount} nháy (+${formatVnd(btLatest.single1.prize)})`);
+    } else {
+      parts.push(`❌ Độc thủ [${btLatest.single1.predicted}] trượt`);
+    }
+    if (btLatest.pair2.wonAny) {
+      parts.push(`✅ Song thủ [${btLatest.pair2.predicted.join('-')}] NỔ (${btLatest.pair2.hits.join(', ')})`);
+    } else {
+      parts.push(`❌ Song thủ [${btLatest.pair2.predicted.join('-')}] trượt`);
+    }
+    if (btLatest.lhn.coverWon) {
+      parts.push(`✅ Cầu [${btLatest.lhn.predictedLabel}] THẮNG`);
+    }
+    if (btLatest.sumTop4.won) {
+      parts.push(`✅ Dàn 4 Tổng NỔ Tổng ${btLatest.actualSum} (+${formatVnd(btLatest.sumTop4.prize)})`);
+    }
+    reconcileBanner.innerHTML = `<strong>Đối soát kỳ #${latest.drawId}:</strong> ${parts.join(' · ')}`;
+  }
+
+  // 24-Draw Road-map
+  const lhnSummary = analysis.stats?.lhnSummary;
+  if (lhnSummary) {
+    document.getElementById('lhnStatsQuickRow').textContent =
+      `Lớn: ${lhnSummary.bigRate}% (Gan ${lhnSummary.bigGap}) · Hòa: ${lhnSummary.tieRate}% (Gan ${lhnSummary.tieGap}) · Nhỏ: ${lhnSummary.smallRate}% (Gan ${lhnSummary.smallGap})`;
+
+    document.getElementById('lhnRoadmapRow').innerHTML = (lhnSummary.roadmap24 || [])
+      .map(
+        (item) => `
+        <div class="road-bead bead-${item.sizeType}" title="Kỳ #${item.drawId} (${item.time}): ${item.numbers.join('-')} = Tổng ${item.sum}">
+          <span class="bead-code">${item.sizeCode}${item.matchType === 'TRIPLE' ? '★' : item.matchType === 'DOUBLE' ? '•' : ''}</span>
+          <span class="bead-sum">T${item.sum}</span>
+        </div>
+      `
+      )
+      .join('');
+  }
+}
+
+/* ==========================================================================
+   2. RENDER NEXT DRAW TRANSPARENT SUGGESTIONS
+   ========================================================================== */
+function renderPredictions(analysis) {
+  if (!analysis || !analysis.predictions) return;
+  const preds = analysis.predictions;
+
+  document.getElementById('predNextDrawId').textContent = `#${analysis.nextDrawId}`;
+
+  // Độc Thủ 1 Số
+  document.getElementById('singleVipConf').textContent =
+    `Đo: ${preds.singleVip.measuredRate}% · Chuẩn: ${preds.singleVip.theoreticalRate}%`;
+  document.getElementById('singleVipFace').innerHTML = `
+    <span class="vip-die face-${preds.singleVip.face}">${preds.singleVip.face}</span>
+  `;
+  document.getElementById('singleVipNote').textContent = preds.singleVip.reason;
+
+  // Song Thủ 2 Số (Tách bạch nổ ≥1 số vs Hòa/Lãi thực >=20k)
+  document.getElementById('pairVipConf').textContent =
+    `Đo ≥1 số: ${preds.pairVip.measuredAnyRate}% · Chuẩn: ${preds.pairVip.theoreticalAnyRate}%`;
+  document.getElementById('pairVipFaces').innerHTML = preds.pairVip.faces
+    .map((f) => `<span class="vip-die face-${f}">${f}</span>`)
+    .join('');
+  document.getElementById('pairVipNote').textContent =
+    `Hòa/Lãi ≥20k: ${preds.pairVip.measuredProfitRate}% (Lý thuyết: ${preds.pairVip.theoreticalProfitRate}%)`;
+
+  // Tam Thủ 3 Số Bao Vây
+  document.getElementById('tripleCoverConf').textContent = `Chuẩn: ${preds.tripleCoverVip.theoreticalAnyRate}%`;
+  document.getElementById('tripleCoverFaces').innerHTML = preds.tripleCoverVip.faces
+    .map((f) => `<span class="vip-die face-${f}">${f}</span>`)
+    .join('');
+  document.getElementById('tripleCoverNote').textContent =
+    `Xác suất lý thuyết có ≥1 mặt: ${preds.tripleCoverVip.theoreticalAnyRate}%`;
+
+  // Cầu Lớn / Hòa / Nhỏ
+  const lhn = preds.lhnVip;
+  if (lhn) {
+    document.getElementById('lhnPredConf').textContent = `Chuẩn bọc Hòa: ${lhn.theoreticalCover}%`;
+    document.getElementById('lhnPredMain').textContent = `🎯 ${lhn.mainPick}`;
+    document.getElementById('lhnPredCover').textContent = `🛡️ ${lhn.comboPick}`;
+    document.getElementById('lhnPredProbs').textContent =
+      `Đo thực tế — Bọc Hòa: ${lhn.measuredCover}% (Chuẩn ${lhn.theoreticalCover}%) · Đơn cửa: ${lhn.measuredExact}% (${lhn.theoreticalExact}%)`;
+    document.getElementById('lhnPredReason').textContent = lhn.reason;
+  }
+
+  // Top 2 Cặp Trùng Đôi
+  const doubleList = document.getElementById('doubleVipList');
+  doubleList.innerHTML = (preds.doubleVip || [])
+    .map(
+      (d) => `
+      <div class="mini-pred-chip" title="${d.statusNote}">
+        <span>Đôi trùng <strong>[${d.pairLabel}]</strong></span>
+        <span>Gan ${d.currentGap}k · x7.5</span>
       </div>
-      <div class="ps-pick">${ps.parityPick}</div>
-      ${
-        ps.parityComboPick
-          ? `<div style="font-size:12px;font-weight:700;color:#38bdf8;margin:4px 0;">🎯 ${ps.parityComboPick}</div>`
-          : ''
+    `
+    )
+    .join('');
+
+  // Dàn 4 Tổng Vàng
+  const sumList = document.getElementById('sumVipList');
+  sumList.innerHTML = (preds.sumVip || [])
+    .map(
+      (s) => `
+      <div class="mini-pred-chip">
+        <span>Tổng <strong>${s.sum}</strong></span>
+        <span>${formatVnd(s.prize)}/10k (Gan ${s.gap ?? s.currentGap ?? 0}k)</span>
+      </div>
+    `
+    )
+    .join('');
+}
+
+/* ==========================================================================
+   3. INTERACTIVE TICKET CALCULATOR & HISTORICAL BACKTEST CHECKER
+   ========================================================================== */
+function getAvailableOptionsForPlayType(playType) {
+  if (playType === 'SINGLE') {
+    return [1, 2, 3, 4, 5, 6].map((f) => ({ id: String(f), label: `Mặt số ${f}` }));
+  }
+  if (playType === 'LHN') {
+    return [
+      { id: 'BIG', label: 'Lớn (12–18) · x1.5' },
+      { id: 'TIE', label: 'Hòa (10–11) · x2.0' },
+      { id: 'SMALL', label: 'Nhỏ (3–9) · x1.5' }
+    ];
+  }
+  if (playType === 'SUM') {
+    const arr = [];
+    for (let s = 3; s <= 18; s++) {
+      arr.push({ id: String(s), label: `Tổng ${s} (x${SUM_PAYOUT_MAP[s].mult})` });
+    }
+    return arr;
+  }
+  if (playType === 'DOUBLE') {
+    return [1, 2, 3, 4, 5, 6].map((f) => ({ id: String(f), label: `Đôi ${f}-${f} (x7.5)` }));
+  }
+  if (playType === 'TRIPLE') {
+    return [
+      { id: 'ANY', label: 'Bão Bất Kỳ (111..666) · x20' },
+      ...[1, 2, 3, 4, 5, 6].map((f) => ({ id: String(f), label: `Bão ${f}${f}${f} · x120` }))
+    ];
+  }
+  return [];
+}
+
+function evaluateTicketOnSingleOutcome(playType, selectedSet, stakePerOption, outcome) {
+  const ratio = stakePerOption / 10000;
+  const [a, b, c] = outcome.numbers;
+  let totalPrize = 0;
+
+  if (playType === 'SINGLE') {
+    for (const opt of selectedSet) {
+      const face = parseInt(opt, 10);
+      const cnt = (a === face ? 1 : 0) + (b === face ? 1 : 0) + (c === face ? 1 : 0);
+      if (cnt === 1) totalPrize += 12000 * ratio;
+      else if (cnt === 2) totalPrize += 20000 * ratio;
+      else if (cnt === 3) totalPrize += 30000 * ratio;
+    }
+  } else if (playType === 'LHN') {
+    for (const opt of selectedSet) {
+      if (opt === outcome.sizeType) {
+        totalPrize += (opt === 'TIE' ? 20000 : 15000) * ratio;
       }
-      ${
-        ps.parityTieStatus
-          ? `<div style="font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:6px;display:inline-block;margin:3px 0;${
-              ps.parityTieAlert
-                ? 'background:rgba(245,158,11,0.2);color:#fde68a;border:1px solid rgba(245,158,11,0.45);'
-                : 'background:rgba(30,41,59,0.7);color:#94a3b8;border:1px solid #23314d;'
-            }">${ps.parityTieStatus}</div>`
-          : ''
+    }
+  } else if (playType === 'SUM') {
+    for (const opt of selectedSet) {
+      const s = parseInt(opt, 10);
+      if (outcome.sum === s && SUM_PAYOUT_MAP[s]) {
+        totalPrize += SUM_PAYOUT_MAP[s].prize10k * ratio;
       }
-      <div class="ps-reason">${ps.parityReason}</div>
-      ${
-        btSumForPs.parityCoverWinRate !== undefined
-          ? `<div style="font-size:11px;color:#cbd5e1;margin-top:6px;padding-top:6px;border-top:1px dashed #23314d;">
-              ✅ Đối soát thực tế: Chính diện <strong>${btSumForPs.parityExactWinRate}%</strong> · Bọc Hòa (≥10 số): <strong style="color:#34d399;">${btSumForPs.parityCoverWinRate}%</strong> · Cặp vé [11-12+Hòa]: <strong style="color:#38bdf8;">${btSumForPs.parity2DoorWinRate}% (RTP ${btSumForPs.parity2DoorRtp}%)</strong>
-            </div>`
-          : ''
+    }
+  } else if (playType === 'DOUBLE') {
+    for (const opt of selectedSet) {
+      const face = parseInt(opt, 10);
+      const cnt = (a === face ? 1 : 0) + (b === face ? 1 : 0) + (c === face ? 1 : 0);
+      if (cnt >= 2) {
+        totalPrize += 75000 * ratio;
       }
+    }
+  } else if (playType === 'TRIPLE') {
+    const isTriple = a === b && b === c;
+    if (isTriple) {
+      for (const opt of selectedSet) {
+        if (opt === 'ANY') {
+          totalPrize += 200000 * ratio;
+        } else if (parseInt(opt, 10) === a) {
+          totalPrize += 1200000 * ratio;
+        }
+      }
+    }
+  }
+
+  return Math.round(totalPrize);
+}
+
+function renderCalculatorChips() {
+  const { playType, selectedOptions } = appState.calc;
+  const options = getAvailableOptionsForPlayType(playType);
+  if (selectedOptions.size === 0 && options.length > 0) {
+    selectedOptions.add(options[0].id);
+  }
+
+  document.getElementById('calcSelectedCount').textContent = `Đã chọn: ${selectedOptions.size} cửa`;
+
+  const container = document.getElementById('calcOptionChips');
+  container.innerHTML = options
+    .map(
+      (opt) => `
+      <button type="button" class="calc-chip ${selectedOptions.has(opt.id) ? 'active' : ''}" data-opt-id="${opt.id}">
+        ${opt.label}
+      </button>
+    `
+    )
+    .join('');
+
+  container.querySelectorAll('.calc-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-opt-id');
+      if (selectedOptions.has(id)) {
+        if (selectedOptions.size > 1) selectedOptions.delete(id);
+      } else {
+        selectedOptions.add(id);
+      }
+      renderCalculatorChips();
+      updateCalculatorResults();
+    });
+  });
+}
+
+function updateCalculatorResults() {
+  const { playType, selectedOptions, stake, range } = appState.calc;
+  const doorCount = selectedOptions.size;
+  const costPerDraw = doorCount * stake;
+
+  // 1. Compute exact theoretical probability & max prize across all 216 outcomes
+  let winWays = 0;
+  let maxPrize = 0;
+  let minWinPrize = Infinity;
+  for (const outcome of ALL_216_OUTCOMES) {
+    const prz = evaluateTicketOnSingleOutcome(playType, selectedOptions, stake, outcome);
+    if (prz > 0) {
+      winWays++;
+      if (prz > maxPrize) maxPrize = prz;
+      if (prz < minWinPrize) minWinPrize = prz;
+    }
+  }
+  if (minWinPrize === Infinity) minWinPrize = 0;
+  const theoProb = ((winWays / 216) * 100).toFixed(2);
+
+  document.getElementById('calcTotalCost').textContent = formatVnd(costPerDraw);
+  document.getElementById('calcTheoProb').textContent = `${theoProb}% (${winWays}/216 tổ hợp)`;
+  document.getElementById('calcMaxPrize').textContent = formatVnd(maxPrize);
+
+  document.getElementById('calcPayoutBreakdown').innerHTML =
+    minWinPrize === maxPrize
+      ? `💡 <strong>Cơ cấu trả thưởng vé đang chọn:</strong> Vốn <strong>${formatVnd(costPerDraw)}/kỳ</strong> (${doorCount} cửa × ${formatVnd(stake)}). Khi trúng nhận <strong>${formatVnd(maxPrize)}</strong> (Lãi ròng <strong>+${formatVnd(maxPrize - costPerDraw)}</strong>/kỳ).`
+      : `💡 <strong>Cơ cấu trả thưởng vé đang chọn:</strong> Vốn <strong>${formatVnd(costPerDraw)}/kỳ</strong> (${doorCount} cửa × ${formatVnd(stake)}). Khi nổ nhận từ <strong>${formatVnd(minWinPrize)}</strong> đến tối đa <strong>${formatVnd(maxPrize)}</strong> tùy số nháy/cửa nổ cùng lúc.`;
+
+  // 2. Run historical check across actual draws
+  const allDraws = appState.syncDraws.length > 0 ? appState.syncDraws : appState.recentDraws;
+  const slice = allDraws.slice(-range);
+  const totalTested = slice.length;
+
+  if (totalTested === 0) return;
+
+  let hitDraws = 0;
+  let totalSpent = totalTested * costPerDraw;
+  let totalWon = 0;
+  const recentHitItems = [];
+
+  for (let i = slice.length - 1; i >= 0; i--) {
+    const d = slice[i];
+    const prz = evaluateTicketOnSingleOutcome(playType, selectedOptions, stake, d);
+    if (prz > 0) {
+      hitDraws++;
+      totalWon += prz;
+      if (recentHitItems.length < 8) {
+        recentHitItems.push({
+          drawId: d.drawId,
+          time: d.time,
+          numbers: d.numbers,
+          prize: prz
+        });
+      }
+    }
+  }
+
+  const empWinRate = ((hitDraws / totalTested) * 100).toFixed(1);
+  const netProfit = totalWon - totalSpent;
+  const rtp = totalSpent > 0 ? ((totalWon / totalSpent) * 100).toFixed(1) : '0.0';
+  const netClass = netProfit >= 0 ? 'text-green' : 'text-red';
+
+  document.getElementById('calcBacktestSummary').innerHTML = `
+    <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+      <span>📊 <strong>Kết quả dò trên ${totalTested} kỳ lịch sử thực tế:</strong></span>
+      <span>Trúng <strong>${hitDraws}/${totalTested} kỳ (${empWinRate}%)</strong> · Tỷ lệ hoàn trả (RTP): <strong>${rtp}%</strong></span>
     </div>
-    <div class="ps-box">
-      <div class="ps-header">
-        <span>⚖️ CẦU LỚN / NHỎ / HÒA KỲ #${analysis.nextDrawId}</span>
-        <span style="color:#34d399;font-weight:700;">Tin cậy: ${ps.sizeConfidence}%</span>
-      </div>
-      <div class="ps-pick">${ps.sizePick}</div>
-      ${
-        ps.sizeComboPick
-          ? `<div style="font-size:12px;font-weight:700;color:#fb923c;margin:4px 0;">🎯 ${ps.sizeComboPick}</div>`
-          : ''
-      }
-      ${
-        ps.sizeTieStatus
-          ? `<div style="font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:6px;display:inline-block;margin:3px 0;${
-              ps.sizeTieAlert
-                ? 'background:rgba(245,158,11,0.2);color:#fde68a;border:1px solid rgba(245,158,11,0.45);'
-                : 'background:rgba(30,41,59,0.7);color:#94a3b8;border:1px solid #23314d;'
-            }">${ps.sizeTieStatus}</div>`
-          : ''
-      }
-      <div class="ps-reason">${ps.sizeReason}</div>
-      ${
-        btSumForPs.sizeCoverWinRate !== undefined
-          ? `<div style="font-size:11px;color:#cbd5e1;margin-top:6px;padding-top:6px;border-top:1px dashed #23314d;">
-              ✅ Đối soát thực tế: Chính diện <strong>${btSumForPs.sizeExactWinRate}%</strong> · Bọc Hòa (≥10 số): <strong style="color:#34d399;">${btSumForPs.sizeCoverWinRate}%</strong>
-            </div>`
-          : ''
-      }
+    <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <span>Tổng vốn: <strong>${formatVnd(totalSpent)}</strong> · Tổng thưởng nhận: <strong class="text-gold">${formatVnd(totalWon)}</strong></span>
+      <span>Chênh lệch: <strong class="${netClass}">${netProfit >= 0 ? '+' : ''}${formatVnd(netProfit)}</strong></span>
     </div>
   `;
 
-  // 6. Adaptive Weights & Zone Bars
-  const w = analysis.activeWeights;
-  const acc = analysis.modelAccuracy;
-  const weightModels = [
-    {
-      name: '🔥 Tần Suất Nổ Toàn Mẫu & Chống Loãng (Overall Hot Frequency)',
-      weight: Math.round(w.freq * 100),
-      acc: acc.freq,
-      desc: `Ưu tiên nhóm số nổ nhiều nhất trên ${analysis.totalHistoricalDraws} kỳ (tự động pha nhịp 120 kỳ khi mẫu > 300 kỳ)`
-    },
-    {
-      name: '⚡ Phong Độ Nóng 10 & 20 Kỳ Gần Nhất (Recent Hot Momentum)',
-      weight: Math.round(((w.momentum10 || 0) + (w.momentum20 || 0)) * 100),
-      acc: acc.momentum10,
-      desc: 'Bắt nhịp các con số đang có phong độ cao, nổ đều đặn trong 10 và 20 kỳ quay gần đây'
-    },
-    {
-      name: '🔗 Ma Trận Kéo Theo Markov (Conditional Transitions)',
-      weight: Math.round(w.markov * 100),
-      acc: acc.markov,
-      desc: 'Tính lực kéo chuyển tiếp trực tiếp từ 20 con số vừa nổ ở kỳ gần nhất'
-    },
-    {
-      name: '⏳ Điểm Rơi Chu Kỳ & Cầu Bệt (Cycle Rhythms & Streaks)',
-      weight: Math.round(w.cycle * 100),
-      acc: acc.cycle,
-      desc: 'Giữ vững cầu bệt >= 2 kỳ (92đ), nhịp rơi vàng 0–2 kỳ (88–92đ) và loại bỏ lô gan'
+  document.getElementById('calcBacktestHitsList').innerHTML =
+    recentHitItems.length > 0
+      ? recentHitItems
+          .map(
+            (h) => `
+          <span class="hit-pill">Kỳ #${h.drawId} (${h.numbers.join('-')}) → +${formatVnd(h.prize)}</span>
+        `
+          )
+          .join('')
+      : `<span style="color:var(--text-muted)">Vé này chưa nổ trong ${totalTested} kỳ gần nhất.</span>`;
+}
+
+function applyAiRecommendationToCalculator() {
+  const preds = appState.analysis?.predictions;
+  if (!preds) return;
+
+  const { playType } = appState.calc;
+  appState.calc.selectedOptions.clear();
+
+  if (playType === 'SINGLE') {
+    for (const f of preds.pairVip.faces) {
+      appState.calc.selectedOptions.add(String(f));
     }
-  ];
+  } else if (playType === 'LHN') {
+    appState.calc.selectedOptions.add(preds.lhnVip.mainSide || 'BIG');
+    appState.calc.selectedOptions.add('TIE');
+  } else if (playType === 'SUM') {
+    for (const item of preds.sumVip) {
+      appState.calc.selectedOptions.add(String(item.sum));
+    }
+  } else if (playType === 'DOUBLE') {
+    for (const item of preds.doubleVip) {
+      appState.calc.selectedOptions.add(String(item.face));
+    }
+  } else if (playType === 'TRIPLE') {
+    appState.calc.selectedOptions.add('ANY');
+    appState.calc.selectedOptions.add(String(preds.singleVip.face));
+  }
 
-  document.getElementById('weightsList').innerHTML = weightModels
-    .map(
-      (m) => `
-      <div class="weight-item">
-        <div class="weight-top">
-          <span>${m.name}</span>
-          <span style="color:#38bdf8;">Trọng số: ${m.weight}% <small style="color:#94a3b8;">(Tỷ lệ trúng: ${m.acc}%)</small></span>
-        </div>
-        <div class="weight-bar-bg">
-          <div class="weight-bar-fill" style="width: ${Math.min(100, Math.max(4, m.weight))}%"></div>
-        </div>
-        <div class="weight-sub">${m.desc}</div>
-      </div>
-    `
-    )
-    .join('');
+  renderCalculatorChips();
+  updateCalculatorResults();
+}
 
-  document.getElementById('zonesBars').innerHTML = (analysis.zones || [])
-    .map(
-      (z) => `
-      <div class="zone-chip">
-        <div class="zone-range">Đầu ${z.range}</div>
-        <div class="zone-val">${z.hitsInLast5} lần</div>
-        <div style="font-size:10.5px;color:#64748b;">TB ${z.avgPerDraw}/kỳ</div>
-      </div>
-    `
-    )
-    .join('');
+/* ==========================================================================
+   4. RENDER DEEP STATISTICS (6 FACES, DOUBLES/TRIPLES, 16 SUMS)
+   ========================================================================== */
+function renderStatistics(analysis) {
+  const stats = analysis?.stats;
+  if (!stats) return;
 
-  // 7. Top 12 Ranked Numbers Table
-  document.getElementById('top12TableBody').innerHTML = (analysis.top12Ranked || [])
+  // 1. 6 Faces Table
+  const faceBody = document.getElementById('faceStatsTableBody');
+  faceBody.innerHTML = (stats.faceStats || [])
     .map(
-      (item, idx) => `
+      (f) => `
       <tr>
-        <td class="t12-rank" data-label="Hạng"><strong>#${idx + 1}</strong></td>
-        <td class="t12-num" data-label="Số"><span class="mini-ball hit">${pad2(item.number)}</span></td>
-        <td class="t12-score" data-label="Điểm Tổng"><strong style="color:#38bdf8;">${item.totalScore}</strong></td>
-        <td class="t12-conf" data-label="Tin Cậy"><span style="color:#34d399;font-weight:700;">${item.confidence}%</span></td>
-        <td class="t12-freq" data-label="Tần Suất">${item.countAll}/${analysis.totalHistoricalDraws}k <small style="color:#64748b;">(${item.count10}/10k)</small></td>
-        <td class="t12-gap" data-label="Chu Kỳ / Gan">${
-          item.gap === 0
-            ? `<span style="color:#fbbf24;font-weight:700;">Bệt ${item.streak} kỳ</span>`
-            : `Cách ${item.gap} kỳ`
-        }</td>
-        <td class="t12-status" data-label="Phong Độ">
-          <span class="sat-tag ${item.statusType || 'optimal'}">${item.statusNote || 'Số hay ra'}</span>
-        </td>
+        <td><span class="die-mini face-${f.face}">${f.face}</span></td>
+        <td><strong>${f.drawHits}</strong> kỳ (${f.hitRate}%)</td>
+        <td style="font-family:var(--font-mono); font-size:0.74rem;">${f.hit1x} / ${f.hit2x} / ${f.hit3x}</td>
+        <td style="font-family:var(--font-mono);">${f.currentGap}k <span style="color:var(--text-muted)">(${f.maxGap}k)</span></td>
+        <td style="font-family:var(--font-mono);">${f.count10}/10 · ${f.count30}/30</td>
+        <td><strong class="${f.rank === 1 ? 'text-gold' : f.rank <= 3 ? 'text-cyan' : ''}">#${f.rank ?? '-'}</strong></td>
       </tr>
     `
     )
     .join('');
 
-  // 8. Hot / Streak / Cold Lists
-  document.getElementById('statTotalDraws').textContent = analysis.totalHistoricalDraws;
-
-  document.getElementById('hotNumbersList').innerHTML = (analysis.hotNumbers || [])
+  // Strategy Comparison vs Baseline
+  const comp = analysis.strategyComparison || [];
+  document.getElementById('weightsBarContainer').innerHTML = comp
     .map(
-      (x) => `
-      <div class="stat-chip">
-        <span class="mini-ball hot">${pad2(x.number)}</span>
-        <span>${x.countAll} lần <small style="color:#64748b;">(${x.count20}/20k)</small></span>
+      (item) => `
+      <div class="weight-item" title="${item.description}">
+        <div class="weight-item-top">
+          <span>${item.isSelected ? '👉 ' : ''}${item.label}</span>
+          <strong>${item.single1WinRate}% · RTP ${item.single1Rtp}%</strong>
+        </div>
+        <div style="font-size:0.68rem; color:var(--text-muted); margin-bottom:4px;">
+          Khoảng ngẫu nhiên 95%: ${item.judge.bandLow}%–${item.judge.bandHigh}% (z=${item.judge.z}) · ${item.judge.verdict}
+        </div>
+        <div class="weight-bar-track">
+          <div class="weight-bar-fill" style="width:${Math.min(100, Math.round(item.single1WinRate))}%"></div>
+        </div>
       </div>
     `
     )
     .join('');
 
-  const streaks = analysis.streakNumbers || [];
-  document.getElementById('streakNumbersList').innerHTML =
-    streaks.length > 0
-      ? streaks
-          .map(
-            (x) => `
-          <div class="stat-chip">
-            <span class="mini-ball streak">${pad2(x.number)}</span>
-            <span>Thông ${x.streak} kỳ</span>
-          </div>
-        `
-          )
-          .join('')
-      : `<span style="font-size:12px;color:#64748b;">Kỳ vừa rồi không có số thông >= 2 kỳ</span>`;
-
-  document.getElementById('coldNumbersList').innerHTML = (analysis.coldNumbers || [])
-    .map(
-      (x) => `
-      <div class="stat-chip">
-        <span class="mini-ball cold">${pad2(x.number)}</span>
-        <span>Gan ${x.gap} kỳ</span>
-      </div>
-    `
-    )
-    .join('');
-
-  // 9. Walk-Forward Backtest Table
-  const btSum = analysis.backtestSummary || {};
-  const evalCount = btSum.evaluatedDraws || 1;
-  const theo = btSum.theoretical || {};
-  const b2Rate = btSum.bac2WinRate !== undefined ? btSum.bac2WinRate : ((btSum.bac2WinCount || 0) / evalCount * 100).toFixed(1);
-  const b3Rate = btSum.bac3WinRate !== undefined ? btSum.bac3WinRate : ((btSum.bac3WinCount || 0) / evalCount * 100).toFixed(1);
-  const b4Rate = btSum.bac4WinRate !== undefined ? btSum.bac4WinRate : ((btSum.bac4WinCount || 0) / evalCount * 100).toFixed(1);
-  const b5Rate = btSum.bac5WinRate !== undefined ? btSum.bac5WinRate : ((btSum.bac5WinCount || 0) / evalCount * 100).toFixed(1);
-  const t4Rate = btSum.top4AnyWinRate ?? 0;
-  const l100 = btSum.last100;
-
-  const rtpColor = (rtp) => (rtp >= 100 ? '#34d399' : rtp >= 70 ? '#38bdf8' : '#fbbf24');
-
-  document.getElementById('backtestSummaryBadges').innerHTML = `
-    <span class="bt-badge">Kiểm chứng: <strong>${btSum.evaluatedDraws || 0} kỳ</strong></span>
-    <span class="bt-badge">VIP #1 (B2): <strong>${btSum.bac2WinCount || 0}</strong> (${b2Rate}% · <span style="color:${rtpColor(btSum.bac2Rtp || 0)}">RTP ${btSum.bac2Rtp ?? '--'}%</span> <small style="opacity:0.75">/ LT ${theo.bac2Rtp ?? 54.1}%</small>)</span>
-    <span class="bt-badge" style="background:rgba(56,189,248,0.16);color:#38bdf8;border-color:rgba(56,189,248,0.35);">Dàn 4 Cặp Độc Lập: <strong>${btSum.top4AnyWinCount || 0} kỳ nổ</strong> (${t4Rate}% <small style="opacity:0.75">/ LT ${theo.top4DisjointAnyWinRate ?? 22.3}%</small> · <span style="color:${rtpColor(btSum.top4Rtp || 0)}">RTP ${btSum.top4Rtp ?? '--'}%</span> <small style="opacity:0.75">/ LT ${theo.top4DisjointRtp ?? 54.1}%</small>)</span>
-    ${
-      l100
-        ? `<span class="bt-badge" style="background:rgba(245,158,11,0.14);color:#fde68a;border-color:rgba(245,158,11,0.35);">${l100.evaluatedDraws} kỳ gần nhất: VIP#1 <strong>${l100.bac2WinRate}%</strong> (RTP ${l100.bac2Rtp}%) · Dàn 4 cặp <strong>${l100.top4AnyWinRate}%</strong> (RTP ${l100.top4Rtp}%)</span>`
-        : ''
-    }
-    <span class="bt-badge">Bậc 3: <strong>${b3Rate}%</strong> (RTP ${btSum.bac3Rtp ?? '--'}%)</span>
-    <span class="bt-badge">Bậc 4: <strong>${b4Rate}%</strong> (RTP ${btSum.bac4Rtp ?? '--'}%)</span>
-    <span class="bt-badge">Bậc 5: <strong>${b5Rate}%</strong> (RTP ${btSum.bac5Rtp ?? '--'}%)</span>
-    ${
-      btSum.parityCoverWinRate !== undefined
-        ? `<span class="bt-badge" style="background:rgba(16,185,129,0.14);color:#34d399;border-color:rgba(16,185,129,0.35);">Chẵn/Lẻ+Hòa: <strong>${btSum.parityCoverWinRate}%</strong> (Vé [11-12+Hòa]: <strong>${btSum.parity2DoorWinRate}% · RTP ${btSum.parity2DoorRtp}%</strong>)</span>`
-        : ''
-    }
-    ${
-      btSum.sizeCoverWinRate !== undefined
-        ? `<span class="bt-badge" style="background:rgba(251,146,60,0.14);color:#fb923c;border-color:rgba(251,146,60,0.35);">Lớn/Nhỏ+Hòa: <strong>${btSum.sizeCoverWinRate}%</strong> (Chính diện: <strong>${btSum.sizeExactWinRate}%</strong>)</span>`
-        : ''
-    }
+  // 2. Doubles & Triples Summary + Tables
+  const anyD = stats.anyDoubleSummary;
+  const anyT = stats.anyTripleSummary;
+  document.getElementById('doubleTripleSummaryRow').innerHTML = `
+    <div class="dt-box">
+      <div style="color:var(--text-muted); font-size:0.7rem;">BẤT KỲ TRÙNG ĐÔI (11..66)</div>
+      <div>Đã nổ: <strong>${anyD.hits} kỳ (${anyD.rate}%)</strong> vs chuẩn 44.4%</div>
+      <div>Gan hiện tại: <strong class="text-cyan">${anyD.currentGap} kỳ</strong> (Max: ${anyD.maxGap}k)</div>
+    </div>
+    <div class="dt-box">
+      <div style="color:var(--text-muted); font-size:0.7rem;">BÃO BẤT KỲ (111..666 — x20)</div>
+      <div>Đã nổ: <strong>${anyT.hits} kỳ (${anyT.rate}%)</strong> vs chuẩn 2.78%</div>
+      <div>Gan hiện tại: <strong class="text-gold">${anyT.currentGap} kỳ</strong> (Max: ${anyT.maxGap}k)</div>
+    </div>
   `;
 
-  const renderTierCell = (tierObj) => {
-    const hitSet = new Set(tierObj.hits || []);
-    const balls = (tierObj.predicted || [])
-      .map((n) => `<span class="mini-ball ${hitSet.has(n) ? 'hit' : ''}">${pad2(n)}</span>`)
-      .join('');
-    const isWin = (tierObj.prize || 0) > 0;
-    const hitLabel = `Trúng ${tierObj.hitCount}/${tierObj.predicted.length}`;
-    const color = isWin ? '#34d399' : (tierObj.hitCount > 0 ? '#38bdf8' : '#64748b');
-    return `
-      <div class="tier-cell-balls">${balls}</div>
-      <div style="font-size:10.5px;color:${color};font-weight:${isWin ? '700' : '500'};margin-top:2px;">
-        ${isWin ? `🏆 ${hitLabel} (+${formatVnd(tierObj.prize)})` : hitLabel}
+  document.getElementById('doublesTableBody').innerHTML = (stats.doublesStats || [])
+    .map(
+      (d) => `
+      <tr>
+        <td>
+          <span class="die-mini face-${d.face}">${d.face}</span>
+          <span class="die-mini face-${d.face}">${d.face}</span>
+        </td>
+        <td><strong>${d.hits}</strong> (${d.rate}%)</td>
+        <td style="font-family:var(--font-mono);">${d.avgCycle}k</td>
+        <td style="font-family:var(--font-mono);"><strong>${d.currentGap}k</strong> (${d.maxGap}k)</td>
+        <td style="font-size:0.73rem;">${d.statusNote}</td>
+      </tr>
+    `
+    )
+    .join('');
+
+  document.getElementById('triplesTableBody').innerHTML = (stats.triplesStats || [])
+    .map(
+      (t) => `
+      <div class="triple-mini-card">
+        <div>
+          <strong class="text-gold">Bão ${t.tripleLabel}</strong>
+          <span style="float:right; font-family:var(--font-mono);">${t.hits} lần</span>
+        </div>
+        <div style="color:var(--text-muted); font-size:0.7rem;">
+          Gan: <strong style="color:var(--text-main)">${t.currentGap}k</strong> · Max: ${t.maxGap}k
+        </div>
+      </div>
+    `
+    )
+    .join('');
+
+  // 3. 16 Sums Table
+  document.getElementById('sumsTableBody').innerHTML = (stats.sumsStats || [])
+    .map(
+      (s) => `
+      <tr>
+        <td>
+          <strong style="font-family:var(--font-mono); font-size:0.86rem;" class="${s.sum >= 12 ? 'text-red' : s.sum <= 9 ? 'text-cyan' : 'text-gold'}">
+            Tổng ${s.sum}
+          </strong>
+        </td>
+        <td style="font-family:var(--font-mono); color:#34d399;">${formatVnd(s.prize)} <small>(x${s.multiplier})</small></td>
+        <td><strong>${s.hits}</strong> (${s.rate}%)</td>
+        <td style="font-family:var(--font-mono); color:var(--text-muted);">${s.prob}% (${s.ways}/216)</td>
+        <td style="font-family:var(--font-mono);">
+          <strong class="${s.isLongGap ? 'text-gold' : ''}">${s.currentGap}k</strong> / ${s.expectedCycle}k (${s.maxGap}k)
+        </td>
+      </tr>
+    `
+    )
+    .join('');
+}
+
+/* ==========================================================================
+   5. RENDER WALK-FORWARD BACKTEST & RECENT DRAW HISTORY
+   ========================================================================== */
+function renderBacktestAndHistory(analysis, recentDraws) {
+  const summary = analysis?.backtestSummary;
+  if (summary) {
+    document.getElementById('btEvalCountBadge').textContent = `Đã đối soát: ${summary.evaluatedDraws} kỳ`;
+
+    document.getElementById('btSummaryGrid').innerHTML = `
+      <div class="bt-kpi-card">
+        <span>Độc Thủ 1 Số</span>
+        <strong>${summary.single1WinRate}% (${summary.single1WinCount} kỳ)</strong>
+        <small>Lý thuyết: 42.13% · RTP: ${summary.single1Rtp}% (z=${summary.single1Judge.z})</small>
+      </div>
+      <div class="bt-kpi-card">
+        <span>Song Thủ 2 Số (20k/kỳ)</span>
+        <strong>≥1 số: ${summary.pair2AnyWinRate}% · Lãi ≥20k: ${summary.pair2ProfitRate}%</strong>
+        <small>Chuẩn: 70.37% / 37.04% · RTP: ${summary.pair2Rtp}%</small>
+      </div>
+      <div class="bt-kpi-card">
+        <span>Cầu Lớn/Nhỏ + Bọc Hòa</span>
+        <strong>${summary.lhnCoverWinRate}% (${summary.lhnCoverWinCount} kỳ)</strong>
+        <small>Chuẩn: 62.5% · Đơn cửa: ${summary.lhnExactWinRate}% (37.5%)</small>
+      </div>
+      <div class="bt-kpi-card">
+        <span>Dàn 4 Tổng (9,10,11,12)</span>
+        <strong>${summary.sumTop4WinRate}% (${summary.sumTop4WinCount} kỳ)</strong>
+        <small>Chuẩn: 48.15% · RTP: ${summary.sumTop4Rtp}%</small>
       </div>
     `;
-  };
+  }
 
-  const renderTop4Cell = (t4Obj) => {
-    if (!t4Obj || !t4Obj.pairs) return '<span style="color:#64748b">--</span>';
-    const pairTags = t4Obj.pairs
-      .map((p) => {
-        const hSet = new Set(p.hits || []);
-        const cls = p.won ? 'border:1px solid #10b981;background:rgba(16,185,129,0.18);' : 'border:1px solid #23314d;background:#0f172a;';
-        const numsHtml = p.numbers
-          .map((n) => `<span class="mini-ball ${hSet.has(n) ? 'hit' : ''}" style="width:21px;height:21px;font-size:10.5px;">${pad2(n)}</span>`)
-          .join('');
-        return `<span style="display:inline-flex;align-items:center;gap:2px;padding:2px 4px;border-radius:6px;${cls}">${numsHtml}</span>`;
-      })
-      .join(' ');
-    const isWin = t4Obj.wonAny;
-    const color = isWin ? '#34d399' : '#64748b';
-    return `
-      <div class="top4-pairs-wrap">${pairTags}</div>
-      <div style="font-size:10.5px;color:${color};font-weight:${isWin ? '700' : '500'};margin-top:3px;">
-        ${isWin ? `🏆 Nổ ${t4Obj.winCount}/4 cặp (+${formatVnd(t4Obj.prize)})` : '0/4 cặp nổ'}
-      </div>
-    `;
-  };
+  const btRows = (analysis?.backtestHistory || []).slice(0, 60);
+  document.getElementById('backtestTableBody').innerHTML = btRows
+    .map((r) => {
+      const s1Badge = r.single1.won
+        ? `<span class="text-green">✅ [${r.single1.predicted}] (${r.single1.appearCount}N)</span>`
+        : `<span style="color:var(--text-muted)">❌ [${r.single1.predicted}]</span>`;
 
-  document.getElementById('backtestTableBody').innerHTML = (analysis.backtestHistory || [])
-    .map((row) => {
-      const prizes = [];
-      if (row.top4Pairs?.prize > 0) prizes.push(`Dàn 4 cặp (${row.top4Pairs.winCount}/4): +${formatVnd(row.top4Pairs.prize)}`);
-      if (row.bac2.prize > 0) prizes.push(`VIP #1: +${formatVnd(row.bac2.prize)}`);
-      if (row.bac3.prize > 0) prizes.push(`Bậc 3: +${formatVnd(row.bac3.prize)}`);
-      if (row.bac4.prize > 0) prizes.push(`Bậc 4: +${formatVnd(row.bac4.prize)}`);
-      if (row.bac5.prize > 0) prizes.push(`Bậc 5: +${formatVnd(row.bac5.prize)}`);
+      const p2Badge = r.pair2.wonAny
+        ? `<span class="text-green">✅ [${r.pair2.predicted.join('-')}]</span>`
+        : `<span style="color:var(--text-muted)">❌ [${r.pair2.predicted.join('-')}]</span>`;
 
-      const resultCell = prizes.length > 0
-        ? prizes.map((p) => `<div class="prize-win" style="margin:2px 0;">🏆 ${p}</div>`).join('')
-        : `
-          <div style="font-size:10.5px;line-height:1.4;color:#94a3b8;">
-            <span style="color:${row.bac2.hitCount > 0 ? '#38bdf8' : '#64748b'}">B2: ${row.bac2.hitCount}/2</span> · 
-            <span style="color:${row.bac3.hitCount > 0 ? '#38bdf8' : '#64748b'}">B3: ${row.bac3.hitCount}/3</span><br/>
-            <span style="color:${row.bac4.hitCount > 0 ? '#38bdf8' : '#64748b'}">B4: ${row.bac4.hitCount}/4</span> · 
-            <span style="color:${row.bac5.hitCount > 0 ? '#38bdf8' : '#64748b'}">B5: ${row.bac5.hitCount}/5</span>
-          </div>
-        `;
+      const lhnBadge = r.lhn.coverWon
+        ? `<span class="text-green">✅ ${r.lhn.predictedLabel}</span>`
+        : `<span style="color:var(--text-muted)">❌ ${r.lhn.predictedLabel}</span>`;
+
+      const sumBadge = r.sumTop4.won
+        ? `<span class="text-gold">✅ [${r.sumTop4.predicted.join(',')}]</span>`
+        : `<span style="color:var(--text-muted)">[${r.sumTop4.predicted.join(',')}]</span>`;
 
       return `
         <tr>
-          <td class="bt-draw" data-label="Kỳ Quay">
-            <strong>#${row.drawId}</strong>
-            <div class="bt-draw-meta">
-              <div style="font-size:11px;color:#64748b;">${row.time}</div>
-              ${
-                row.sampleSizeUsed
-                  ? `<div style="font-size:10.5px;color:#38bdf8;font-weight:600;">Mẫu: ${row.sampleSizeUsed} kỳ</div>`
-                  : ''
-              }
-            </div>
+          <td style="font-family:var(--font-mono);">#${r.drawId} <small style="color:var(--text-muted)">(${r.time})</small></td>
+          <td>
+            ${r.actualNumbers.map((n) => `<span class="die-mini face-${n}">${n}</span>`).join('')}
+            <strong style="font-family:var(--font-mono); margin-left:4px;">= ${r.actualSum}</strong>
           </td>
-          <td class="bt-bac2" data-label="Bậc 2 (VIP #1)">${renderTierCell(row.bac2)}</td>
-          <td class="bt-top4" data-label="Dàn 4 Cặp Độc Lập">${renderTop4Cell(row.top4Pairs)}</td>
-          <td class="bt-bac3" data-label="Bậc 3">${renderTierCell(row.bac3)}</td>
-          <td class="bt-bac4" data-label="Bậc 4">${renderTierCell(row.bac4)}</td>
-          <td class="bt-bac5" data-label="Bậc 5">${renderTierCell(row.bac5)}</td>
-          <td class="bt-result" data-label="Kết Quả Đối Soát">${resultCell}</td>
+          <td style="font-family:var(--font-mono);">${s1Badge}</td>
+          <td style="font-family:var(--font-mono);">${p2Badge}</td>
+          <td>${lhnBadge}</td>
+          <td style="font-family:var(--font-mono);">${sumBadge}</td>
         </tr>
       `;
     })
     .join('');
 
-  // 10. Recent Draw History Table
+  // Recent History Table
   document.getElementById('historyTableBody').innerHTML = (recentDraws || [])
-    .map(
-      (d) => `
-      <tr>
-        <td class="hist-draw" data-label="Kỳ"><strong>#${d.drawId}</strong></td>
-        <td class="hist-time" data-label="Giờ">
-          <div><strong>${d.time}</strong></div>
-          <div style="font-size:10.5px;color:#64748b;">${d.date}</div>
-        </td>
-        <td class="hist-balls" data-label="20 Số Kết Quả">
-          ${d.numbers.map((n) => `<span class="mini-ball">${pad2(n)}</span>`).join('')}
-        </td>
-        <td class="hist-meta" data-label="Chẵn/Lẻ · Lớn/Nhỏ">
-          <div style="font-size:11.5px;color:#38bdf8;">${d.parityLabel}</div>
-          <div style="font-size:11.5px;color:#fb923c;">${d.sizeLabel}</div>
-        </td>
-      </tr>
-    `
-    )
+    .map((d) => {
+      const sizeClass = d.sizeType === 'BIG' ? 'text-red' : d.sizeType === 'SMALL' ? 'text-cyan' : 'text-gold';
+      return `
+        <tr>
+          <td style="font-family:var(--font-mono); font-weight:700;">#${d.drawId}</td>
+          <td style="font-family:var(--font-mono); font-size:0.74rem; color:var(--text-secondary);">${d.date} · ${d.time}</td>
+          <td>${d.numbers.map((n) => `<span class="die-mini face-${n}">${n}</span>`).join('')}</td>
+          <td style="font-family:var(--font-mono); font-weight:800;">${d.sum}</td>
+          <td><strong class="${sizeClass}">${d.sizeLabel}</strong></td>
+          <td style="font-size:0.75rem;">${d.matchLabel}</td>
+        </tr>
+      `;
+    })
     .join('');
 }
 
-// Connect Server-Sent Events (SSE)
-function connectLiveStream() {
-  const es = new EventSource('/api/stream');
+/* ==========================================================================
+   6. COUNTDOWN & LIVE STREAM HANDLING
+   ========================================================================== */
+function updateCountdownDisplay() {
+  const sch = appState.schedule;
+  if (!sch) return;
 
-  es.addEventListener('init', (e) => {
-    const data = JSON.parse(e.data);
-    renderAll(data);
-    syncCachedDrawsToServerIfNeeded(data);
-  });
+  document.getElementById('nextTargetId').textContent = `#${sch.nextDrawId || '------'}`;
+  document.getElementById('nextExpectedTime').textContent = `Giờ quay: ${sch.expectedDrawTimeStr || '--:--'}`;
 
-  es.addEventListener('state_update', (e) => {
-    const data = JSON.parse(e.data);
-    renderAll(data);
-  });
+  const remMs = Math.max(0, (sch.targetTimestampMs || 0) - Date.now());
+  const totalSec = Math.floor(remMs / 1000);
+  const mins = String(Math.floor(totalSec / 60)).padStart(2, '0');
+  const secs = String(totalSec % 60).padStart(2, '0');
 
-  es.addEventListener('new_draw', (e) => {
-    const data = JSON.parse(e.data);
-    renderAll(data);
+  const timerEl = document.getElementById('countdownValue');
+  const labelEl = document.getElementById('countdownLabel');
+
+  if (sch.awaitingResult || totalSec === 0) {
+    labelEl.textContent = 'Đang mở thưởng kỳ';
+    timerEl.textContent = 'QUAY...';
+    if (Date.now() - appState.lastZeroTriggerMs > 18000) {
+      appState.lastZeroTriggerMs = Date.now();
+      fetch('/api/refresh', { method: 'POST' }).catch(() => {});
+    }
+  } else {
+    labelEl.textContent = sch.statusText || 'Đếm ngược kỳ';
+    timerEl.textContent = `${mins}:${secs}`;
+  }
+}
+
+function applyServerState(payload) {
+  if (!payload) return;
+
+  appState.schedule = payload.schedule || appState.schedule;
+  appState.recentDraws = payload.recentDraws || appState.recentDraws;
+  appState.syncDraws = payload.syncDraws || appState.syncDraws;
+  appState.analysis = payload.analysis || appState.analysis;
+
+  if (appState.syncDraws.length > 0) {
+    saveDrawsToLocalCache(appState.syncDraws);
+    syncLocalCacheToServerIfNeeded(appState.analysis?.totalHistoricalDraws || 0);
+  }
+
+  const dot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  if (payload.isPolling) {
+    dot.classList.add('polling');
+    statusText.textContent = payload.lastPollStatus || 'Đang quét kỳ mới...';
+  } else {
+    dot.classList.remove('polling');
+    statusText.textContent = payload.lastPollStatus || 'Trực tiếp (Live SSE)';
+  }
+
+  if (payload.lastPollTime) {
+    document.getElementById('lastPollTimeLabel').textContent = `Cập nhật: ${payload.lastPollTime}`;
+  }
+
+  const newestId = appState.analysis?.latestDraw?.drawId;
+  if (newestId && appState.lastSeenDrawId && newestId !== appState.lastSeenDrawId) {
     playNotificationChime();
-    const latest = data.analysis?.latestDraw;
-    if (latest) {
-      showToast(
-        `🎉 Đã có kết quả kỳ mới <strong>#${latest.drawId} (${latest.time})</strong>! Đã tính xong dự đoán kỳ <strong>#${data.analysis.nextDrawId}</strong>.`
-      );
+  }
+  if (newestId) {
+    appState.lastSeenDrawId = newestId;
+  }
+
+  renderLatestDraw(appState.analysis);
+  renderPredictions(appState.analysis);
+  renderStatistics(appState.analysis);
+  renderBacktestAndHistory(appState.analysis, appState.recentDraws);
+  updateCalculatorResults();
+  updateCountdownDisplay();
+}
+
+function initControls() {
+  // Mode Selector
+  const modeSelect = document.getElementById('modeSelect');
+  modeSelect.addEventListener('change', async () => {
+    const mode = modeSelect.value;
+    try {
+      const res = await fetch(`/api/state?mode=${encodeURIComponent(mode)}`);
+      if (res.ok) {
+        const data = await res.json();
+        applyServerState(data);
+      }
+    } catch {
+      // Ignore error
     }
   });
 
-  es.addEventListener('poll_status', (e) => {
-    const info = JSON.parse(e.data);
-    renderPollStatus(info);
+  // Sound Toggle
+  const soundBtn = document.getElementById('soundToggleBtn');
+  soundBtn.addEventListener('click', () => {
+    appState.soundEnabled = !appState.soundEnabled;
+    soundBtn.textContent = appState.soundEnabled ? '🔔 Âm báo: Bật' : '🔕 Âm báo: Tắt';
+  });
+
+  // Manual Refresh
+  const refreshBtn = document.getElementById('refreshBtn');
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    try {
+      const res = await fetch('/api/refresh', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.state) applyServerState(data.state);
+      }
+    } finally {
+      setTimeout(() => {
+        refreshBtn.disabled = false;
+      }, 800);
+    }
+  });
+
+  // Expand History (+150 draws)
+  const expandBtn = document.getElementById('expandHistoryBtn');
+  expandBtn.addEventListener('click', async () => {
+    expandBtn.disabled = true;
+    const origText = expandBtn.innerHTML;
+    expandBtn.innerHTML = '<span>⏳</span> Đang tải...';
+    try {
+      const res = await fetch('/api/expand-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pages: 15 })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.state) applyServerState(data.state);
+      }
+    } finally {
+      expandBtn.innerHTML = origText;
+      expandBtn.disabled = false;
+    }
+  });
+
+  // Calculator Controls
+  const playTypeEl = document.getElementById('calcPlayType');
+  playTypeEl.addEventListener('change', () => {
+    appState.calc.playType = playTypeEl.value;
+    appState.calc.selectedOptions.clear();
+    const opts = getAvailableOptionsForPlayType(appState.calc.playType);
+    if (opts.length > 0) appState.calc.selectedOptions.add(opts[0].id);
+    renderCalculatorChips();
+    updateCalculatorResults();
+  });
+
+  const stakeEl = document.getElementById('calcStakeSelect');
+  stakeEl.addEventListener('change', () => {
+    appState.calc.stake = parseInt(stakeEl.value, 10) || 10000;
+    updateCalculatorResults();
+  });
+
+  const rangeEl = document.getElementById('calcBacktestRange');
+  rangeEl.addEventListener('change', () => {
+    appState.calc.range = parseInt(rangeEl.value, 10) || 100;
+    updateCalculatorResults();
+  });
+
+  document.getElementById('calcApplyAiBtn').addEventListener('click', () => {
+    applyAiRecommendationToCalculator();
+  });
+
+  renderCalculatorChips();
+}
+
+function connectSseStream() {
+  const es = new EventSource('/api/stream');
+
+  es.addEventListener('state_update', (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      applyServerState(data);
+    } catch {
+      // Ignore parse error
+    }
+  });
+
+  es.addEventListener('poll_status', (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      const dot = document.getElementById('statusDot');
+      const statusText = document.getElementById('statusText');
+      if (data.isPolling) {
+        dot.classList.add('polling');
+      } else {
+        dot.classList.remove('polling');
+      }
+      if (data.lastPollStatus) statusText.textContent = data.lastPollStatus;
+      if (data.schedule) {
+        appState.schedule = data.schedule;
+        updateCountdownDisplay();
+      }
+    } catch {
+      // Ignore parse error
+    }
   });
 
   es.onerror = () => {
-    document.getElementById('pollStatusText').textContent = 'Đang tự động kết nối lại stream...';
+    document.getElementById('statusText').textContent = 'Đang kết nối lại...';
   };
 }
 
-// Local 1-second countdown ticker
-setInterval(() => {
-  if (localCountdownSec > 0) {
-    localCountdownSec--;
-  } else {
-    awaitingResultFlag = true;
-  }
-  renderCountdownUI();
-}, 1000);
+document.addEventListener('DOMContentLoaded', async () => {
+  initControls();
+  setInterval(updateCountdownDisplay, 1000);
 
-// Event Listeners
-document.getElementById('btnRefreshNow')?.addEventListener('click', async () => {
-  unlockAudioContext();
-  const btn = document.getElementById('btnRefreshNow');
-  btn.disabled = true;
-  btn.textContent = '⏳ Đang quét...';
   try {
-    const data = await fetchJson('/api/refresh', { method: 'POST' });
-    renderAll(data);
-    if (data.refreshResult?.added > 0) {
-      showToast(`✅ Đã cập nhật thêm ${data.refreshResult.added} kỳ quay mới!`);
-    } else {
-      showToast(`ℹ️ Dữ liệu hiện tại đã là kỳ mới nhất (#${data.analysis?.latestDraw?.drawId || '---'}).`);
+    const res = await fetch('/api/state');
+    if (res.ok) {
+      const data = await res.json();
+      applyServerState(data);
     }
-  } catch (err) {
-    showToast(`⚠️ Lỗi khi quét thủ công: ${err.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '🔄 Quét Kết Quả Ngay';
+  } catch {
+    // Fallback to SSE
   }
+
+  connectSseStream();
 });
-
-document.getElementById('btnSoundToggle')?.addEventListener('click', () => {
-  soundEnabled = !soundEnabled;
-  if (soundEnabled) unlockAudioContext();
-  const btn = document.getElementById('btnSoundToggle');
-  btn.textContent = soundEnabled ? '🔔 Âm báo: BẬT' : '🔕 Âm báo: TẮT';
-});
-
-document.getElementById('btnExpandHistory')?.addEventListener('click', async () => {
-  unlockAudioContext();
-  const btn = document.getElementById('btnExpandHistory');
-  btn.disabled = true;
-  btn.textContent = '⏳ Đang nạp sâu...';
-  try {
-    const data = await fetchJson('/api/expand-history?days=2&pages=8', { method: 'POST' });
-    renderAll(data);
-    const total = data.analysis?.totalHistoricalDraws || data.refreshResult?.totalSample || '--';
-    if (data.refreshResult?.added > 0) {
-      showToast(
-        `📈 Đã nạp thêm <strong>${data.refreshResult.added} kỳ</strong> cũ! Tổng mẫu tính toán hiện tại: <strong>${total} kỳ</strong>.`
-      );
-    } else if (data.refreshResult?.limitReached) {
-      showToast(`ℹ️ Đã đạt giới hạn bộ nhớ tối đa (<strong>${total} kỳ</strong>).`);
-    } else {
-      showToast(`ℹ️ Không còn kỳ cũ hơn khả dụng từ nguồn (Tổng mẫu: <strong>${total} kỳ</strong>).`);
-    }
-  } catch (err) {
-    showToast(`⚠️ Lỗi khi mở rộng mẫu: ${err.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '📥 Mở Rộng Mẫu (+Kỳ Cũ)';
-  }
-});
-
-document.getElementById('strategySelect')?.addEventListener('change', async (e) => {
-  const selectEl = e.target;
-  const mode = selectEl.value;
-  const prevMode = appState?.analysis?.mode;
-  selectEl.disabled = true;
-  try {
-    const data = await fetchJson(`/api/state?mode=${encodeURIComponent(mode)}`);
-    renderAll(data);
-  } catch (err) {
-    console.error('Failed to switch strategy mode:', err);
-    if (prevMode) selectEl.value = prevMode;
-    showToast(`⚠️ Không thể đổi chiến lược: ${err.message}`);
-  } finally {
-    selectEl.disabled = false;
-  }
-});
-
-// Start
-connectLiveStream();
-

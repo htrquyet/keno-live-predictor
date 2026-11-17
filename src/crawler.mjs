@@ -1,212 +1,10 @@
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
-/**
- * Parse Keno draws from MinhChinh HTML
- */
-export function parseMinhChinhHtml(html) {
-  const draws = [];
-  const rowRegex =
-    /<div class="kn-row(?:\s+kn-alt)?">\s*<div class="kn-c-ky"><div class="kn-ky">#?(\d+)<\/div><\/div>\s*<div class="kn-c-time"><div class="kn-time">([^<]+)<\/div><div class="kn-date">([^<]+)<\/div><\/div>\s*<div class="kn-c-balls"><div class="kn-balls">([\s\S]*?)<\/div><\/div>/g;
-
-  let match;
-  while ((match = rowRegex.exec(html)) !== null) {
-    const rawId = match[1].trim();
-    const time = match[2].trim();
-    const date = match[3].trim();
-    const ballsHtml = match[4];
-    const ballMatches = [...ballsHtml.matchAll(/<span class="kn-ball">(\d+)<\/span>/g)];
-    const numbers = ballMatches
-      .map((m) => parseInt(m[1], 10))
-      .filter((n) => !Number.isNaN(n) && n >= 1 && n <= 80);
-
-    if (numbers.length === 20) {
-      draws.push(normalizeDraw(rawId, time, date, numbers, 'minhchinh.com'));
-    }
-  }
-  return draws;
-}
-
-/**
- * Parse Keno draws from KetQuaDienToan HTML (fallback source)
- */
-export function parseKetQuaDienToanHtml(html) {
-  const draws = [];
-  const blockRegex =
-    /<div class="kythuong">\s*Kỳ vé #?(\d+)\s*\|\s*Lúc\s*(\d{1,2}:\d{2})\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*<\/div>\s*<div class="box_ketqua">([\s\S]*?)<\/div>/g;
-
-  let match;
-  while ((match = blockRegex.exec(html)) !== null) {
-    const rawId = match[1].trim();
-    const time = match[2].trim();
-    const date = match[3].trim();
-    const ballsHtml = match[4];
-    const ballMatches = [...ballsHtml.matchAll(/<span class="ball ball_keno">(\d+)<\/span>/g)];
-    const numbers = ballMatches
-      .map((m) => parseInt(m[1], 10))
-      .filter((n) => !Number.isNaN(n) && n >= 1 && n <= 80);
-
-    if (numbers.length === 20) {
-      draws.push(normalizeDraw(rawId, time, date, numbers, 'ketquadientoan.com'));
-    }
-  }
-  return draws;
-}
-
-/**
- * Normalize draw object with standard 6-digit ID and parity/size stats
- */
-export function normalizeDraw(rawId, time, date, numbers, source = 'live') {
-  // Note: ketquadientoan sometimes omits leading '3' (e.g. '02442' vs '302442')
-  let cleanId = String(rawId).replace(/^#/, '').trim();
-  if (cleanId.length === 5 && cleanId.startsWith('0')) {
-    cleanId = '3' + cleanId;
-  }
-  const sortedNumbers = [...numbers].sort((a, b) => a - b);
-  const evenCount = sortedNumbers.filter((n) => n % 2 === 0).length;
-  const oddCount = 20 - evenCount;
-  const bigCount = sortedNumbers.filter((n) => n > 40).length;
-  const smallCount = 20 - bigCount;
-
-  let parityLabel = 'Hòa Chẵn Lẻ (10-10)';
-  if (evenCount >= 13) parityLabel = `Chẵn (${evenCount}-${oddCount})`;
-  else if ( evenCount >= 11) parityLabel = `Chẵn nhẹ (${evenCount}-${oddCount})`;
-  else if (oddCount >= 13) parityLabel = `Lẻ (${evenCount}-${oddCount})`;
-  else if (oddCount >= 11) parityLabel = `Lẻ nhẹ (${evenCount}-${oddCount})`;
-
-  let sizeLabel = 'Hòa Lớn Nhỏ (10-10)';
-  if (bigCount >= 13) sizeLabel = `Lớn (${bigCount}-${smallCount})`;
-  else if (bigCount >= 11) sizeLabel = `Lớn nhẹ (${bigCount}-${smallCount})`;
-  else if (smallCount >= 13) sizeLabel = `Nhỏ (${bigCount}-${smallCount})`;
-  else if (smallCount >= 11) sizeLabel = `Nhỏ nhẹ (${bigCount}-${smallCount})`;
-
-  return {
-    drawId: cleanId,
-    drawNumber: parseInt(cleanId, 10),
-    time,
-    date,
-    numbers: sortedNumbers,
-    evenCount,
-    oddCount,
-    bigCount,
-    smallCount,
-    parityLabel,
-    sizeLabel,
-    sum: sortedNumbers.reduce((acc, v) => acc + v, 0),
-    source
-  };
-}
+export const DRAWS_PER_DAY = 159; // 06:05 to 21:53 every 6 minutes
 
 function pad2(n) {
   return String(n).padStart(2, '0');
-}
-
-/**
- * Reliable Vietnam timezone (UTC+7) calendar & clock components
- */
-export function getVnNowParts(nowDate = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23'
-  }).formatToParts(nowDate);
-
-  const map = {};
-  for (const p of parts) map[p.type] = p.value;
-
-  const hours = parseInt(map.hour, 10) % 24;
-  const minutes = parseInt(map.minute, 10);
-  const seconds = parseInt(map.second, 10);
-
-  return {
-    day: parseInt(map.day, 10),
-    month: parseInt(map.month, 10),
-    year: parseInt(map.year, 10),
-    hours,
-    minutes,
-    seconds,
-    dateSlash: `${map.day}/${map.month}/${map.year}`,
-    dateDash: `${map.day}-${map.month}-${map.year}`
-  };
-}
-
-/**
- * Helper to get date string in DD-MM-YYYY format for Vietnam timezone (UTC+7)
- */
-export function getVnDateStr(offsetDays = 0) {
-  const vn = getVnNowParts();
-  const utc = new Date(Date.UTC(vn.year, vn.month - 1, vn.day - offsetDays));
-  return `${pad2(utc.getUTCDate())}-${pad2(utc.getUTCMonth() + 1)}-${utc.getUTCFullYear()}`;
-}
-
-function parseSlashDateToUtcMs(dateSlashStr) {
-  if (!dateSlashStr || typeof dateSlashStr !== 'string') return null;
-  const m = dateSlashStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return null;
-  const dd = parseInt(m[1], 10);
-  const mm = parseInt(m[2], 10);
-  const yyyy = parseInt(m[3], 10);
-  return Date.UTC(yyyy, mm - 1, dd);
-}
-
-function formatUtcMsToDash(utcMs) {
-  const d = new Date(utcMs);
-  return `${pad2(d.getUTCDate())}-${pad2(d.getUTCMonth() + 1)}-${d.getUTCFullYear()}`;
-}
-
-/**
- * Fetch a single page of Keno results from MinhChinh
- */
-export async function fetchMinhChinhPage(page = 1, dateStr = null) {
-  const url = 'https://www.minhchinh.com/xo-so-dien-toan-keno.html';
-  const postBody = new URLSearchParams({
-    date: dateStr || '',
-    ky: '',
-    number: '',
-    page: String(page)
-  }).toString();
-
-  const options = {
-    method: 'POST',
-    headers: {
-      'User-Agent': USER_AGENT,
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: postBody,
-    signal: AbortSignal.timeout(9000)
-  };
-
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    throw new Error(`MinhChinh HTTP ${res.status}`);
-  }
-  const html = await res.text();
-  return parseMinhChinhHtml(html);
-}
-
-/**
- * Fetch latest draw from KetQuaDienToan fallback
- */
-export async function fetchKetQuaDienToanLatest() {
-  const url = 'https://www.ketquadientoan.com/tat-ca-ky-xo-so-keno.html';
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': USER_AGENT,
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-    },
-    signal: AbortSignal.timeout(8000)
-  });
-  if (!res.ok) {
-    throw new Error(`KetQuaDienToan HTTP ${res.status}`);
-  }
-  const html = await res.text();
-  return parseKetQuaDienToanHtml(html);
 }
 
 function sleep(ms) {
@@ -214,239 +12,294 @@ function sleep(ms) {
 }
 
 /**
- * Fetch a MinhChinh page with polite pacing and 1 cooldown retry on empty burst rate-limit responses
+ * Deterministic daily slot (1..159) and HH:MM time (06:05..21:53) from Bingo18 drawNumber
  */
-async function fetchMinhChinhPageGentle(page, dateStr, waitBeforeMs = 0) {
-  if (waitBeforeMs > 0) {
-    await sleep(waitBeforeMs);
-  }
-  try {
-    const list = await fetchMinhChinhPage(page, dateStr);
-    if (list && list.length > 0) {
-      return list;
-    }
-  } catch (err) {
-    console.warn(`[Crawler] Retry page ${page} date ${dateStr} after error:`, err.message);
-  }
-  // MinhChinh returns HTTP 200 empty body briefly under rapid burst requests (~3s cooldown)
-  await sleep(3500);
-  return await fetchMinhChinhPage(page, dateStr);
+export function computeDrawTimeFromNumber(drawNumber) {
+  const k = (((drawNumber - 10) % DRAWS_PER_DAY) + DRAWS_PER_DAY) % DRAWS_PER_DAY;
+  const totalMinutes = 6 * 60 + 5 + k * 6; // 06:05 + 6*k
+  const hh = Math.floor(totalMinutes / 60);
+  const mm = totalMinutes % 60;
+  return {
+    slotIndex: k + 1,
+    time: `${pad2(hh)}:${pad2(mm)}`
+  };
 }
 
 /**
- * Compute date strings (DD-MM-YYYY) from today back to cover latestStoredDateSlash (between minDays and maxDays)
+ * Normalize a Bingo18 draw object with complete statistical metadata
  */
-function buildDateRangeToCover(latestStoredDateSlash = null, minDays = 3, maxDays = 7) {
-  let daysCount = minDays;
-  if (latestStoredDateSlash) {
-    const vn = getVnNowParts();
-    const todayUtcMs = Date.UTC(vn.year, vn.month - 1, vn.day);
-    const storedUtcMs = parseSlashDateToUtcMs(latestStoredDateSlash);
-    if (storedUtcMs !== null && todayUtcMs >= storedUtcMs) {
-      const diffDays = Math.ceil((todayUtcMs - storedUtcMs) / 86400000) + 1;
-      daysCount = Math.min(maxDays, Math.max(minDays, diffDays));
-    }
+export function normalizeDraw(rawId, date, numbers, source = 'live', explicitTime = null) {
+  const cleanNum = parseInt(String(rawId).replace(/^#/, '').trim(), 10);
+  const drawId = String(cleanNum).padStart(6, '0');
+  const nums = numbers.map((n) => parseInt(n, 10)).filter((n) => n >= 1 && n <= 6);
+  const [a, b, c] = nums;
+  const sum = a + b + c;
+
+  let sizeType = 'TIE';
+  let sizeLabel = 'Hòa (10–11)';
+  if (sum >= 12) {
+    sizeType = 'BIG';
+    sizeLabel = 'Lớn (12–18)';
+  } else if (sum <= 9) {
+    sizeType = 'SMALL';
+    sizeLabel = 'Nhỏ (3–9)';
   }
-  const dates = [];
-  for (let i = 0; i < daysCount; i++) {
-    dates.push(getVnDateStr(i));
+
+  let matchType = 'DIFF';
+  let matchLabel = '3 số khác nhau';
+  let matchedFace = null;
+
+  if (a === b && b === c) {
+    matchType = 'TRIPLE';
+    matchedFace = a;
+    matchLabel = `Bão ${a}-${a}-${a}`;
+  } else if (a === b || a === c || b === c) {
+    matchType = 'DOUBLE';
+    matchedFace = a === b || a === c ? a : b;
+    matchLabel = `Trùng đôi ${matchedFace}-${matchedFace}`;
   }
-  return dates;
+
+  const scheduleInfo = computeDrawTimeFromNumber(cleanNum);
+
+  return {
+    drawId,
+    drawNumber: cleanNum,
+    date: date || '',
+    time: explicitTime || scheduleInfo.time,
+    slotIndex: scheduleInfo.slotIndex,
+    numbers: [a, b, c],
+    sum,
+    sizeType,
+    sizeLabel,
+    parityType: sum % 2 === 0 ? 'EVEN' : 'ODD',
+    parityLabel: sum % 2 === 0 ? 'Tổng Chẵn' : 'Tổng Lẻ',
+    matchType,
+    matchLabel,
+    matchedFace,
+    source
+  };
 }
 
 /**
- * Shared paginated crawler across multiple MinhChinh date strings (15 draws/page => 8 pages covers 119 draws/day)
+ * Parse Bingo18 draws from XoSoMinhNgoc HTML (both main page and AJAX list fragments)
  */
-async function crawlMinhChinhDates(dates, pagesPerDay = 8, options = {}) {
-  const { knownIds = null, maxKnownId = 0, onProgress = null } = options;
-  const map = new Map();
-  let requestCount = 0;
+export function parseMinhNgocBingoHtml(html) {
+  const draws = [];
 
-  for (const d of dates) {
-    const dayBatch = [];
-    let reachedKnownContiguous = false;
-
-    for (let p = 1; p <= pagesPerDay; p++) {
-      try {
-        const waitMs = requestCount === 0 ? 0 : 300;
-        requestCount++;
-        const list = await fetchMinhChinhPageGentle(p, d, waitMs);
-        if (!list || list.length === 0) {
-          break;
-        }
-        let newCount = 0;
-        let hitKnown = false;
-        for (const item of list) {
-          if (knownIds && knownIds.has(item.drawNumber)) {
-            hitKnown = true;
-          }
-          if (!map.has(item.drawNumber)) {
-            map.set(item.drawNumber, item);
-            newCount++;
-            if (!knownIds || !knownIds.has(item.drawNumber)) {
-              dayBatch.push(item);
-            }
-          }
-        }
-
-        // Flush page 1 of today immediately so UI and disk get the newest draw in <1s
-        if (requestCount === 1 && dayBatch.length > 0 && typeof onProgress === 'function') {
-          onProgress([...dayBatch]);
-          dayBatch.length = 0;
-        }
-
-        // If we connected with known history and already have >= 250 draws stored, stop early
-        const minInList = Math.min(...list.map((x) => x.drawNumber));
-        if (
-          knownIds &&
-          knownIds.size >= 250 &&
-          maxKnownId > 0 &&
-          (hitKnown || minInList <= maxKnownId + 1)
-        ) {
-          reachedKnownContiguous = true;
-          break;
-        }
-
-        // MinhChinh has 15 draws/page and day starts at 06:08; stop paging this date if end-of-day reached
-        const hasOpeningDraw = list.some((x) => x.time === '06:08');
-        if (list.length < 15 || hasOpeningDraw || (newCount === 0 && p > 2)) {
-          break;
-        }
-      } catch (err) {
-        console.warn(`[Crawler] Warn fetching page ${p} date ${d}:`, err.message);
-        break;
-      }
-    }
-
-    if (dayBatch.length > 0 && typeof onProgress === 'function') {
-      onProgress([...dayBatch]);
-    }
-    if (reachedKnownContiguous) {
-      break;
+  // 1. Featured top draw (<article class="vk ... vkt-bingo18">)
+  const topMatch = html.match(
+    /<a class="vk-kyve"[^>]*>[\s\S]*?<b>#?(\d+)<\/b>[\s\S]*?<ul class="vk-bong">\s*<li>(\d)<\/li>\s*<li>(\d)<\/li>\s*<li>(\d)<\/li>/i
+  );
+  const topDateMatch = html.match(/Mở thưởng[^<]*ngày\s*(\d{2}\/\d{2}\/\d{4})/i);
+  if (topMatch) {
+    const nums = [parseInt(topMatch[2], 10), parseInt(topMatch[3], 10), parseInt(topMatch[4], 10)];
+    if (nums.every((n) => n >= 1 && n <= 6)) {
+      draws.push(normalizeDraw(topMatch[1], topDateMatch ? topDateMatch[1] : '', nums, 'xosominhngoc.net.vn'));
     }
   }
 
-  return map;
+  // 2. List items (<li><a class="vlitem" ...)
+  const itemRegex =
+    /<span class="vlky"><b>#?(\d+)<\/b><time[^>]*>[^<]*?(\d{2}\/\d{2}\/\d{4})<\/time><\/span><span class="vlso"><span class="kq">(\d)<\/span><span class="kq">(\d)<\/span><span class="kq">(\d)<\/span><\/span>/gi;
+  let m;
+  while ((m = itemRegex.exec(html)) !== null) {
+    const nums = [parseInt(m[3], 10), parseInt(m[4], 10), parseInt(m[5], 10)];
+    if (nums.every((n) => n >= 1 && n <= 6)) {
+      draws.push(normalizeDraw(m[1], m[2], nums, 'xosominhngoc.net.vn'));
+    }
+  }
+
+  return draws;
 }
 
 /**
- * Fetch multiple pages across multiple days to guarantee no missing draws, stopping early once connected to stored history
+ * Parse Bingo18 draws from official Vietlott HTML
  */
-export async function fetchInitialHistory(pagesPerDay = 8, options = {}) {
-  const { knownIds = null, maxKnownId = 0, latestStoredDateSlash = null, onProgress = null } = options;
-  const dates = buildDateRangeToCover(latestStoredDateSlash, 3, 7);
-  const map = await crawlMinhChinhDates(dates, pagesPerDay, {
-    knownIds,
-    maxKnownId,
-    onProgress
+export function parseVietlottBingoHtml(html) {
+  const draws = [];
+  const rowRegex =
+    /view-detail-bingo18-result\?nocatche=1&id=\d+"[^>]*>(\d{2}\/\d{2}\/\d{4})<\/a><div><a[^>]*>#?(\d+)<\/a><\/div><\/td>\s*<td[^>]*><div class="day_so_ket_qua_v2">\s*<div class="CssDivBingo"><span class="bong_tron_bingo[^"]*">(\d)<\/span>\s*<span class="bong_tron_bingo[^"]*">(\d)<\/span>\s*<span class="bong_tron_bingo[^"]*">(\d)<\/span>/gi;
+
+  let m;
+  while ((m = rowRegex.exec(html)) !== null) {
+    const date = m[1];
+    const rawId = m[2];
+    const nums = [parseInt(m[3], 10), parseInt(m[4], 10), parseInt(m[5], 10)];
+    if (nums.every((n) => n >= 1 && n <= 6)) {
+      draws.push(normalizeDraw(rawId, date, nums, 'vietlott.vn'));
+    }
+  }
+  return draws;
+}
+
+/**
+ * Get current Vietnam time parts (UTC+7)
+ */
+export function getVnNowParts() {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
   });
-
-  // Also check fallback in case it has a brand-new draw
-  try {
-    const fallbackList = await fetchKetQuaDienToanLatest();
-    const extra = [];
-    for (const item of fallbackList) {
-      if (!map.has(item.drawNumber)) {
-        map.set(item.drawNumber, item);
-        if (!knownIds || !knownIds.has(item.drawNumber)) {
-          extra.push(item);
-        }
-      }
-    }
-    if (extra.length > 0 && typeof onProgress === 'function') {
-      onProgress(extra);
-    }
-  } catch (err) {
-    // Ignore fallback error if primary succeeded
+  const parts = {};
+  for (const p of fmt.formatToParts(now)) {
+    parts[p.type] = p.value;
   }
+  const year = parseInt(parts.year, 10);
+  const month = parseInt(parts.month, 10);
+  const day = parseInt(parts.day, 10);
+  const hours = parseInt(parts.hour, 10) % 24;
+  const minutes = parseInt(parts.minute, 10);
+  const seconds = parseInt(parts.second, 10);
 
-  // Sort ascending by drawNumber (oldest -> newest)
-  return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+  return {
+    year,
+    month,
+    day,
+    hours,
+    minutes,
+    seconds,
+    dateSlash: `${pad2(day)}/${pad2(month)}/${year}`,
+    dateIso: `${year}-${pad2(month)}-${pad2(day)}`
+  };
 }
 
 /**
- * Fetch older historical days strictly earlier than the current oldest stored draw
+ * Fetch main page of XoSoMinhNgoc Bingo18
  */
-export async function fetchOlderHistoryDraws(oldestDraw = null, daysToFetch = 2, pagesPerDay = 8) {
+export async function fetchMinhNgocMainPage() {
+  const res = await fetch('https://xosominhngoc.net.vn/ket-qua-xo-so-bingo18.html', {
+    headers: { 'User-Agent': USER_AGENT },
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!res.ok) throw new Error(`MinhNgoc HTTP ${res.status}`);
+  const html = await res.text();
+  return parseMinhNgocBingoHtml(html);
+}
+
+/**
+ * Fetch paginated AJAX batch from XoSoMinhNgoc (start = 10, 20, 30, ...)
+ */
+export async function fetchMinhNgocAjaxBatch(start = 10, moilan = 10, dateIso = null) {
   const vn = getVnNowParts();
-  const todayUtcMs = Date.UTC(vn.year, vn.month - 1, vn.day);
-  const parsedOldestMs = oldestDraw ? parseSlashDateToUtcMs(oldestDraw.date) : null;
-  const anchorUtcMs = parsedOldestMs ?? todayUtcMs;
-
-  // If the oldest draw is already the opening draw (06:08) of that day, step straight to prior days
-  const hasOpeningDraw = oldestDraw && oldestDraw.time === '06:08';
-  const startStep = parsedOldestMs !== null ? (hasOpeningDraw ? 1 : 0) : 3;
-
-  const dates = [];
-  for (let i = 0; i < daysToFetch; i++) {
-    const dayMs = anchorUtcMs - (startStep + i) * 86400000;
-    dates.push(formatUtcMsToDash(dayMs));
-  }
-
-  const map = await crawlMinhChinhDates(dates, pagesPerDay);
-  return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+  const ngay = dateIso || vn.dateIso;
+  const url = `https://xosominhngoc.net.vn/ajax/kqxs_vietlott_list.php?tinh=121&start=${start}&moilan=${moilan}&ngay=${ngay}`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': USER_AGENT,
+      'X-Requested-With': 'XMLHttpRequest'
+    },
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!res.ok) throw new Error(`MinhNgoc AJAX HTTP ${res.status}`);
+  const html = await res.text();
+  return parseMinhNgocBingoHtml(html);
 }
 
 /**
- * Backfill any missing draws between two IDs (self-healing across up to 7 days)
+ * Fetch latest draws from official Vietlott page
  */
-export async function fetchMissingGapDraws(startDrawNumber, endDrawNumber, startDateSlash = null) {
-  const map = new Map();
-  const dates = buildDateRangeToCover(startDateSlash, 3, 7);
-  let requestCount = 0;
-
-  for (const d of dates) {
-    let stopAllDates = false;
-    for (let p = 1; p <= 8; p++) {
-      try {
-        const waitMs = requestCount === 0 ? 0 : 300;
-        requestCount++;
-        const list = await fetchMinhChinhPageGentle(p, d, waitMs);
-        if (!list || list.length === 0) break;
-        let anyInRange = false;
-        for (const item of list) {
-          if (item.drawNumber >= startDrawNumber && item.drawNumber <= endDrawNumber) {
-            map.set(item.drawNumber, item);
-            anyInRange = true;
-          }
-        }
-        // If oldest on page is already older than startDrawNumber, we have passed the gap completely
-        const minOnPage = Math.min(...list.map((x) => x.drawNumber));
-        if (minOnPage < startDrawNumber) {
-          stopAllDates = true;
-          break;
-        }
-        const hasOpeningDraw = list.some((x) => x.time === '06:08');
-        if (list.length < 15 || hasOpeningDraw || (!anyInRange && p > 2)) {
-          break;
-        }
-      } catch (err) {
-        console.warn(`[Crawler] Gap healing error on date ${d} p${p}:`, err.message);
-        break;
-      }
-    }
-    if (stopAllDates) break;
-  }
-
-  return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+export async function fetchVietlottOfficialLatest() {
+  const res = await fetch('https://vietlott.vn/vi/trung-thuong/ket-qua-trung-thuong/winning-number-bingo18', {
+    headers: { 'User-Agent': USER_AGENT },
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!res.ok) throw new Error(`Vietlott HTTP ${res.status}`);
+  const html = await res.text();
+  return parseVietlottBingoHtml(html);
 }
 
 /**
- * Poll latest results from both sources in parallel for lowest latency
+ * Poll latest Bingo18 draws from both sources in parallel for lowest latency
  */
 export async function fetchLatestDraws() {
   const results = await Promise.allSettled([
-    fetchMinhChinhPage(1),
-    fetchMinhChinhPage(2),
-    fetchKetQuaDienToanLatest()
+    fetchMinhNgocMainPage(),
+    fetchVietlottOfficialLatest()
   ]);
 
   const map = new Map();
   for (const r of results) {
     if (r.status === 'fulfilled' && Array.isArray(r.value)) {
       for (const item of r.value) {
-        map.set(item.drawNumber, item);
+        if (!map.has(item.drawNumber)) {
+          map.set(item.drawNumber, item);
+        }
       }
+    }
+  }
+  return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+}
+
+/**
+ * Fetch initial history on startup, stopping early once connected with stored draws
+ */
+export async function fetchInitialHistory(maxBatches = 15, options = {}) {
+  const { knownIds = null, maxKnownId = 0, onProgress = null } = options;
+  const map = new Map();
+
+  try {
+    const firstBatch = await fetchLatestDraws();
+    const newFirst = [];
+    for (const d of firstBatch) {
+      map.set(d.drawNumber, d);
+      if (!knownIds || !knownIds.has(d.drawNumber)) {
+        newFirst.push(d);
+      }
+    }
+    if (newFirst.length > 0 && typeof onProgress === 'function') {
+      onProgress(newFirst);
+    }
+
+    // Check if we already connected with knownIds
+    if (knownIds && knownIds.size >= 200 && maxKnownId > 0 && firstBatch.length > 0) {
+      const minFirst = Math.min(...firstBatch.map((x) => x.drawNumber));
+      if (minFirst <= maxKnownId + 1) {
+        return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+      }
+    }
+  } catch (err) {
+    console.warn('[Crawler] Initial latest fetch warn:', err.message);
+  }
+
+  for (let b = 1; b <= maxBatches; b++) {
+    const start = b * 10;
+    try {
+      await sleep(180);
+      const list = await fetchMinhNgocAjaxBatch(start, 10);
+      if (!list || list.length === 0) break;
+
+      const batchNew = [];
+      let hitKnown = false;
+      for (const item of list) {
+        if (knownIds && knownIds.has(item.drawNumber)) {
+          hitKnown = true;
+        }
+        if (!map.has(item.drawNumber)) {
+          map.set(item.drawNumber, item);
+          if (!knownIds || !knownIds.has(item.drawNumber)) {
+            batchNew.push(item);
+          }
+        }
+      }
+
+      if (batchNew.length > 0 && typeof onProgress === 'function') {
+        onProgress(batchNew);
+      }
+
+      const minInBatch = Math.min(...list.map((x) => x.drawNumber));
+      if (knownIds && knownIds.size >= 200 && maxKnownId > 0 && (hitKnown || minInBatch <= maxKnownId + 1)) {
+        break;
+      }
+    } catch (err) {
+      console.warn(`[Crawler] Batch start=${start} warn:`, err.message);
+      break;
     }
   }
 
@@ -454,78 +307,116 @@ export async function fetchLatestDraws() {
 }
 
 /**
- * Compute next Keno draw schedule info (8-minute cycle from 06:08 to 21:52 Vietnam Time)
+ * Fetch older historical draws strictly preceding the current oldest stored draw
+ */
+export async function fetchOlderHistoryDraws(oldestDraw = null, batchesToFetch = 12, currentTotalSize = 0) {
+  const map = new Map();
+  const startOffset = Math.max(10, Math.floor(currentTotalSize / 10) * 10);
+
+  for (let i = 0; i < batchesToFetch; i++) {
+    const start = startOffset + i * 10;
+    try {
+      if (i > 0) await sleep(180);
+      const list = await fetchMinhNgocAjaxBatch(start, 10);
+      if (!list || list.length === 0) break;
+      for (const item of list) {
+        if (!oldestDraw || item.drawNumber < oldestDraw.drawNumber) {
+          map.set(item.drawNumber, item);
+        }
+      }
+    } catch (err) {
+      console.warn(`[Crawler] Older history start=${start} warn:`, err.message);
+      break;
+    }
+  }
+
+  return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+}
+
+/**
+ * Backfill any missing draws between startDrawNumber and endDrawNumber
+ */
+export async function fetchMissingGapDraws(startDrawNumber, endDrawNumber) {
+  const map = new Map();
+  for (let b = 1; b <= 35; b++) {
+    const start = b * 10;
+    try {
+      if (b > 1) await sleep(160);
+      const list = await fetchMinhNgocAjaxBatch(start, 10);
+      if (!list || list.length === 0) break;
+      for (const item of list) {
+        if (item.drawNumber >= startDrawNumber && item.drawNumber <= endDrawNumber) {
+          map.set(item.drawNumber, item);
+        }
+      }
+      const minOnBatch = Math.min(...list.map((x) => x.drawNumber));
+      if (minOnBatch < startDrawNumber) break;
+    } catch (err) {
+      console.warn(`[Crawler] Gap heal start=${start} warn:`, err.message);
+      break;
+    }
+  }
+  return [...map.values()].sort((a, b) => a.drawNumber - b.drawNumber);
+}
+
+/**
+ * Compute next Bingo18 draw schedule (every 6 minutes from 06:05 to 21:53 VN time)
  */
 export function getNextDrawSchedule(latestDraw = null) {
   const vn = getVnNowParts();
-  const { hours, minutes, seconds, dateSlash } = vn;
-  const totalMinutes = hours * 60 + minutes;
+  const nowTotalSec = vn.hours * 3600 + vn.minutes * 60 + vn.seconds;
+  const firstDrawSec = (6 * 60 + 5) * 60; // 06:05:00
+  const lastDrawSec = (21 * 60 + 53) * 60; // 21:53:00
+  const intervalSec = 6 * 60; // 360s
 
-  const firstDrawMin = 6 * 60 + 8; // 06:08 (368) - actual first Vietlott Keno draw of day
-  const lastDrawMin = 21 * 60 + 52; // 21:52 (1312) - actual final draw of day
+  const isOperatingHours = nowTotalSec >= firstDrawSec - 300 && nowTotalSec <= lastDrawSec + 300;
+  let nextSlotIdx = 0;
+  let secondsUntilNextSchedule = 0;
 
-  let nextDrawTotalMin;
-  let isOperatingHours = true;
-
-  if (totalMinutes < firstDrawMin) {
-    nextDrawTotalMin = firstDrawMin;
-    isOperatingHours = false;
-  } else if (totalMinutes >= lastDrawMin) {
-    nextDrawTotalMin = firstDrawMin + 24 * 60;
-    isOperatingHours = false;
+  if (nowTotalSec < firstDrawSec) {
+    nextSlotIdx = 0;
+    secondsUntilNextSchedule = firstDrawSec - nowTotalSec;
+  } else if (nowTotalSec > lastDrawSec) {
+    nextSlotIdx = 0;
+    secondsUntilNextSchedule = 86400 - nowTotalSec + firstDrawSec;
   } else {
-    // Next multiple of 8 minutes strictly greater than current minute
-    const remainder = totalMinutes % 8;
-    nextDrawTotalMin = totalMinutes + (8 - remainder);
+    const elapsedSinceFirst = nowTotalSec - firstDrawSec;
+    const completedSlots = Math.floor(elapsedSinceFirst / intervalSec);
+    nextSlotIdx = Math.min(DRAWS_PER_DAY - 1, completedSlots + 1);
+    const nextDrawSec = firstDrawSec + nextSlotIdx * intervalSec;
+    secondsUntilNextSchedule = Math.max(0, nextDrawSec - nowTotalSec);
   }
 
-  const secondsUntilNextSchedule =
-    (nextDrawTotalMin - totalMinutes) * 60 - seconds;
+  const nextTotalMin = 6 * 60 + 5 + nextSlotIdx * 6;
+  const nextHH = Math.floor(nextTotalMin / 60);
+  const nextMM = nextTotalMin % 60;
+  const nextDrawTimeStr = `${pad2(nextHH)}:${pad2(nextMM)}`;
 
-  const nextHour = Math.floor((nextDrawTotalMin % (24 * 60)) / 60);
-  const nextMin = nextDrawTotalMin % 60;
-  const nextTimeStr = `${pad2(nextHour)}:${pad2(nextMin)}`;
-
+  // Check if latestDraw from today is behind the most recently completed slot
   let awaitingNewResult = false;
-  let expectedDrawTimeStr = nextTimeStr;
-  const expectedDrawId = latestDraw ? String(latestDraw.drawNumber + 1) : '---';
+  let expectedDrawTimeStr = nextDrawTimeStr;
+  const expectedDrawId = latestDraw ? String(latestDraw.drawNumber + 1).padStart(6, '0') : '------';
 
-  // Grace window up to 21:57 so the 21:52 closing draw is caught after 21:52:00
-  const isPostCloseGrace = totalMinutes >= lastDrawMin && totalMinutes <= lastDrawMin + 5;
-
-  if (isOperatingHours || isPostCloseGrace) {
-    const isLatestToday = latestDraw && latestDraw.date === dateSlash;
-
-    if (isLatestToday) {
-      const [latestH, latestM] = (latestDraw.time || '').split(':').map((x) => parseInt(x, 10));
-      if (!Number.isNaN(latestH) && !Number.isNaN(latestM)) {
-        const latestTotalMin = latestH * 60 + latestM;
-        const currentSlotMin = totalMinutes >= lastDrawMin ? lastDrawMin : totalMinutes - (totalMinutes % 8);
-        if (
-          currentSlotMin >= firstDrawMin &&
-          currentSlotMin > latestTotalMin &&
-          currentSlotMin - latestTotalMin <= 60
-        ) {
-          awaitingNewResult = true;
-          const expMin = Math.min(lastDrawMin, latestTotalMin + 8);
-          expectedDrawTimeStr = `${pad2(Math.floor(expMin / 60))}:${pad2(expMin % 60)}`;
-        }
-      }
-    } else if (totalMinutes >= firstDrawMin && totalMinutes < firstDrawMin + 16) {
-      // Waiting for today's opening draw(s) starting 06:08 while latestDraw is from previous day
+  if (isOperatingHours && nowTotalSec >= firstDrawSec + 15 && latestDraw && latestDraw.date === vn.dateSlash) {
+    const latestSlotZero = latestDraw.slotIndex - 1;
+    const expectedLatestSlotZero = Math.floor((nowTotalSec - firstDrawSec) / intervalSec);
+    if (expectedLatestSlotZero > latestSlotZero) {
       awaitingNewResult = true;
-      expectedDrawTimeStr = '06:08';
+      const expMin = 6 * 60 + 5 + (latestSlotZero + 1) * 6;
+      expectedDrawTimeStr = `${pad2(Math.floor(expMin / 60))}:${pad2(expMin % 60)}`;
     }
   }
 
   return {
-    nowTimeStr: `${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`,
-    nextDrawTimeStr: nextTimeStr,
+    nowTimeStr: `${pad2(vn.hours)}:${pad2(vn.minutes)}:${pad2(vn.seconds)}`,
+    nextDrawTimeStr,
     expectedDrawTimeStr,
     expectedDrawId,
-    secondsUntilNextSchedule: Math.max(0, secondsUntilNextSchedule),
+    nextDrawId: expectedDrawId,
+    secondsUntilNextSchedule,
+    targetTimestampMs: Date.now() + secondsUntilNextSchedule * 1000,
     awaitingNewResult,
+    awaitingResult: awaitingNewResult,
     isOperatingHours
   };
 }
-

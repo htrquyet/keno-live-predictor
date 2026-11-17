@@ -10,21 +10,20 @@ import {
   getNextDrawSchedule,
   normalizeDraw
 } from './crawler.mjs';
-import { analyzeAndPredictNextDraw } from './predictor.mjs';
+import { analyzeAndPredictNextDraw, STRATEGIES, DEFAULT_STRATEGY } from './predictor.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'keno_history.json');
-const MAX_HISTORY_DRAWS = 2000;
+const DATA_FILE = path.join(DATA_DIR, 'bingo18_history.json');
+const MAX_HISTORY_DRAWS = 2500;
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3080;
 
-// In-memory store
 const drawMap = new Map();
-let currentMode = 'adaptive';
+let currentMode = DEFAULT_STRATEGY;
 let cachedAnalysis = null;
 let lastPollTime = null;
 let lastPollCompletedMs = 0;
@@ -47,14 +46,15 @@ function loadHistoryFromDisk() {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) {
         for (const item of arr) {
-          if (item && item.drawNumber && Array.isArray(item.numbers) && item.numbers.length === 20) {
-            drawMap.set(item.drawNumber, item);
+          if (item && item.drawNumber && Array.isArray(item.numbers) && item.numbers.length === 3) {
+            const norm = normalizeDraw(item.drawId || item.drawNumber, item.date, item.numbers, item.source || 'disk', item.time);
+            drawMap.set(norm.drawNumber, norm);
           }
         }
       }
-      console.log(`[Server] Loaded ${drawMap.size} historical draws from disk.`);
+      console.log(`[Server] Loaded ${drawMap.size} historical Bingo18 draws from disk.`);
     } catch (err) {
-      console.warn('[Server] Could not parse keno_history.json:', err.message);
+      console.warn('[Server] Could not parse bingo18_history.json:', err.message);
     }
   }
 }
@@ -62,7 +62,6 @@ function loadHistoryFromDisk() {
 function saveHistoryToDisk() {
   ensureDataDir();
   const sorted = getSortedDraws();
-  // Keep up to MAX_HISTORY_DRAWS draws in both memory and disk so expanding history stays bounded and synced
   if (sorted.length > MAX_HISTORY_DRAWS) {
     const dropped = sorted.slice(0, sorted.length - MAX_HISTORY_DRAWS);
     for (const d of dropped) {
@@ -111,8 +110,8 @@ function buildStatePayload(mode = currentMode) {
     lastPollStatus,
     isPolling,
     schedule,
-    recentDraws: [...draws].reverse().slice(0, 30),
-    syncDraws: draws.slice(-150),
+    recentDraws: [...draws].reverse().slice(0, 50),
+    syncDraws: draws.slice(-1000),
     analysis
   };
 }
@@ -129,9 +128,9 @@ function broadcastSse(event, data) {
 }
 
 /**
- * Poll live sources and merge any new draws into the expanding dataset
+ * Poll live sources and merge any new Bingo18 draws into the dataset
  */
-async function pollNow(isInitial = false, pagesToFetch = 8) {
+async function pollNow(isInitial = false, maxBatches = 15) {
   if (activePollPromise) {
     return activePollPromise;
   }
@@ -139,8 +138,8 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
   activePollPromise = (async () => {
     isPolling = true;
     lastPollStatus = isInitial
-      ? `Đang nạp sâu mẫu lịch sử (${pagesToFetch} trang)...`
-      : 'Đang quét kết quả kỳ mới...';
+      ? 'Đang đồng bộ lịch sử Bingo18...'
+      : 'Đang quét kết quả Bingo18 kỳ mới...';
     broadcastSse('poll_status', { isPolling, lastPollStatus, schedule: getCurrentSchedule() });
 
     let added = 0;
@@ -148,7 +147,6 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
 
     try {
       const prevMaxDraw = drawMap.size > 0 ? Math.max(...drawMap.keys()) : 0;
-      const prevMaxDrawObj = prevMaxDraw > 0 ? drawMap.get(prevMaxDraw) : null;
       const knownIds = new Set(drawMap.keys());
 
       const mergeAndFlushBatch = (batch) => {
@@ -158,10 +156,8 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
             drawMap.set(d.drawNumber, d);
             added++;
             batchAdded++;
-            if (!newestDraw || d.drawNumber > newestDraw.drawNumber) {
-              if (d.drawNumber > prevMaxDraw) {
-                newestDraw = d;
-              }
+            if (d.drawNumber > prevMaxDraw && (!newestDraw || d.drawNumber > newestDraw.drawNumber)) {
+              newestDraw = d;
             }
           }
         }
@@ -170,17 +166,16 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
           saveHistoryToDisk();
           recomputeAnalysis();
           lastPollStatus = newestDraw
-            ? `Kỳ mới #${newestDraw.drawId} (${newestDraw.time}) · Mẫu tích lũy: ${drawMap.size} kỳ`
-            : `Đã cập nhật mẫu tính toán: ${drawMap.size} kỳ`;
+            ? `Kỳ mới #${newestDraw.drawId} (${newestDraw.time}) · Mẫu: ${drawMap.size} kỳ`
+            : `Đã cập nhật mẫu: ${drawMap.size} kỳ`;
           broadcastSse('state_update', buildStatePayload(currentMode));
         }
       };
 
       const fetched = isInitial
-        ? await fetchInitialHistory(pagesToFetch, {
+        ? await fetchInitialHistory(maxBatches, {
             knownIds,
             maxKnownId: prevMaxDraw,
-            latestStoredDateSlash: prevMaxDrawObj?.date || null,
             onProgress: mergeAndFlushBatch
           })
         : await fetchLatestDraws();
@@ -195,9 +190,7 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
         }
       }
 
-      // Auto-detect and heal any gaps if Render slept or draws were missed
       if (prevMaxDraw > 0 && newestDraw && newestDraw.drawNumber - prevMaxDraw > 1) {
-        // Check if the gap still exists after fetched batch
         let gapStillExists = false;
         for (let k = prevMaxDraw + 1; k < newestDraw.drawNumber; k++) {
           if (!drawMap.has(k)) {
@@ -206,14 +199,9 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
           }
         }
         if (gapStillExists) {
-          const missingCount = newestDraw.drawNumber - prevMaxDraw - 1;
-          console.log(`[Poll] Detected gap of ${missingCount} draws between #${prevMaxDraw} and #${newestDraw.drawNumber}. Auto-healing...`);
+          console.log(`[Poll] Auto-healing gap #${prevMaxDraw + 1}..#${newestDraw.drawNumber - 1}`);
           try {
-            const gapDraws = await fetchMissingGapDraws(
-              prevMaxDraw + 1,
-              newestDraw.drawNumber - 1,
-              prevMaxDrawObj?.date || null
-            );
+            const gapDraws = await fetchMissingGapDraws(prevMaxDraw + 1, newestDraw.drawNumber - 1);
             for (const gd of gapDraws) {
               if (!drawMap.has(gd.drawNumber)) {
                 drawMap.set(gd.drawNumber, gd);
@@ -221,31 +209,7 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
               }
             }
           } catch (err) {
-            console.warn('[Poll] Gap healing error:', err.message);
-          }
-        }
-      }
-
-      // Check for any internal historical gaps on initial load
-      if (isInitial && drawMap.size > 1) {
-        const sortedKeys = [...drawMap.keys()].sort((a, b) => a - b);
-        for (let i = 1; i < sortedKeys.length; i++) {
-          const prevId = sortedKeys[i - 1];
-          const currId = sortedKeys[i];
-          if (currId - prevId > 1 && currId - prevId <= 500) {
-            console.log(`[Poll] Healing startup internal gap between #${prevId} and #${currId}...`);
-            try {
-              const prevObj = drawMap.get(prevId);
-              const healed = await fetchMissingGapDraws(prevId + 1, currId - 1, prevObj?.date || null);
-              for (const hd of healed) {
-                if (!drawMap.has(hd.drawNumber)) {
-                  drawMap.set(hd.drawNumber, hd);
-                  added++;
-                }
-              }
-            } catch (err) {
-              console.warn('[Poll] Startup gap heal error:', err.message);
-            }
+            console.warn('[Poll] Gap heal error:', err.message);
           }
         }
       }
@@ -258,7 +222,7 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
         recomputeAnalysis();
         lastPollStatus = newestDraw
           ? `Kỳ mới #${newestDraw.drawId} (${newestDraw.time}) · Mẫu tích lũy: ${drawMap.size} kỳ`
-          : `Đã mở rộng mẫu tính toán: ${drawMap.size} kỳ`;
+          : `Đã mở rộng mẫu: ${drawMap.size} kỳ`;
 
         const fullState = buildStatePayload(currentMode);
         broadcastSse(newestDraw && !isInitial ? 'new_draw' : 'state_update', fullState);
@@ -286,14 +250,14 @@ async function pollNow(isInitial = false, pagesToFetch = 8) {
 }
 
 /**
- * Load older historical days strictly preceding the oldest draw currently stored
+ * Load older historical draws strictly preceding the oldest stored draw
  */
-async function expandHistoryNow(days = 2, pagesPerDay = 8) {
+async function expandHistoryNow(batches = 15) {
   if (activePollPromise) {
     try {
       await activePollPromise;
     } catch {
-      // Proceed even if prior poll failed
+      // Ignore prior error
     }
   }
 
@@ -303,7 +267,7 @@ async function expandHistoryNow(days = 2, pagesPerDay = 8) {
 
   activePollPromise = (async () => {
     isPolling = true;
-    lastPollStatus = `Đang nạp thêm ${days} ngày kỳ cũ hơn để mở rộng mẫu...`;
+    lastPollStatus = `Đang nạp thêm ${batches * 10} kỳ Bingo18 cũ hơn...`;
     broadcastSse('poll_status', { isPolling, lastPollStatus, schedule: getCurrentSchedule() });
 
     let added = 0;
@@ -312,7 +276,7 @@ async function expandHistoryNow(days = 2, pagesPerDay = 8) {
     try {
       const sorted = getSortedDraws();
       const oldestDraw = sorted.length > 0 ? sorted[0] : null;
-      const fetched = await fetchOlderHistoryDraws(oldestDraw, days, pagesPerDay);
+      const fetched = await fetchOlderHistoryDraws(oldestDraw, batches, drawMap.size);
 
       const beforeIds = new Set(drawMap.keys());
       for (const d of fetched) {
@@ -341,7 +305,6 @@ async function expandHistoryNow(days = 2, pagesPerDay = 8) {
       }
     } catch (err) {
       lastPollStatus = `Lỗi nạp kỳ cũ (${err.message}) - dùng mẫu ${drawMap.size} kỳ`;
-      console.warn('[ExpandHistory] Error:', err.message);
     } finally {
       isPolling = false;
       activePollPromise = null;
@@ -359,7 +322,7 @@ async function expandHistoryNow(days = 2, pagesPerDay = 8) {
   return activePollPromise;
 }
 
-// Smart Scheduler Loop
+// Smart 6-Minute Scheduler Loop
 let lastQuickPollMs = 0;
 let lastRegularPollMs = 0;
 
@@ -368,21 +331,20 @@ function startSmartPollingLoop() {
     const schedule = getCurrentSchedule();
     const nowMs = Date.now();
 
-    // Hot window: waiting for overdue/closing draw or right around an 8-min draw boundary during operating hours
     const isHotWindow =
       schedule.awaitingNewResult ||
       (schedule.isOperatingHours &&
-        (schedule.secondsUntilNextSchedule <= 4 ||
-          (schedule.secondsUntilNextSchedule >= 460 && schedule.secondsUntilNextSchedule <= 480)));
+        (schedule.secondsUntilNextSchedule <= 5 ||
+          (schedule.secondsUntilNextSchedule >= 340 && schedule.secondsUntilNextSchedule <= 360)));
 
     if (isHotWindow) {
-      if (nowMs - lastQuickPollMs >= 4500) {
+      if (nowMs - lastQuickPollMs >= 4000) {
         lastQuickPollMs = nowMs;
         lastRegularPollMs = nowMs;
         pollNow(false);
       }
     } else {
-      const intervalMs = schedule.isOperatingHours ? 20000 : 120000;
+      const intervalMs = schedule.isOperatingHours ? 18000 : 120000;
       if (nowMs - lastRegularPollMs >= intervalMs) {
         lastRegularPollMs = nowMs;
         pollNow(false);
@@ -404,7 +366,6 @@ const server = http.createServer(async (req, res) => {
   const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = urlObj.pathname;
 
-  // Enable CORS for local dev convenience
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -415,7 +376,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // SSE Endpoint
   if (pathname === '/api/stream' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -427,7 +387,6 @@ const server = http.createServer(async (req, res) => {
     req.on('close', () => {
       sseClients.delete(res);
     });
-    // Trigger immediate live poll if server was idle or awaiting a new draw
     const sched = getCurrentSchedule();
     if (!isPolling && (Date.now() - lastPollCompletedMs > 15000 || sched.awaitingNewResult)) {
       pollNow(false);
@@ -435,10 +394,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // State API
   if (pathname === '/api/state' && req.method === 'GET') {
     const reqMode = urlObj.searchParams.get('mode') || currentMode;
-    if (['adaptive', 'hot', 'due', 'markov'].includes(reqMode)) {
+    if (STRATEGIES[reqMode] && reqMode !== currentMode) {
       currentMode = reqMode;
       recomputeAnalysis();
     }
@@ -448,7 +406,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Client LocalStorage Cache Sync API (restores draws immediately if cloud container slept/restarted)
   if (pathname === '/api/client-sync' && req.method === 'POST') {
     let body = '';
     for await (const chunk of req) {
@@ -462,13 +419,12 @@ const server = http.createServer(async (req, res) => {
       for (const item of clientDraws) {
         if (
           item &&
-          item.drawId &&
-          item.time &&
+          (item.drawId || item.drawNumber) &&
           item.date &&
           Array.isArray(item.numbers) &&
-          item.numbers.length === 20
+          item.numbers.length === 3
         ) {
-          const norm = normalizeDraw(item.drawId, item.time, item.date, item.numbers, item.source || 'client-cache');
+          const norm = normalizeDraw(item.drawId || item.drawNumber, item.date, item.numbers, item.source || 'client-cache', item.time);
           if (norm.drawNumber > 0 && !drawMap.has(norm.drawNumber)) {
             drawMap.set(norm.drawNumber, norm);
             added++;
@@ -478,8 +434,7 @@ const server = http.createServer(async (req, res) => {
       if (added > 0) {
         saveHistoryToDisk();
         recomputeAnalysis();
-        const fullState = buildStatePayload(currentMode);
-        broadcastSse('state_update', fullState);
+        broadcastSse('state_update', buildStatePayload(currentMode));
       }
     } catch (err) {
       console.warn('[ClientSync] Invalid payload:', err.message);
@@ -490,7 +445,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Force Refresh API
   if (pathname === '/api/refresh' && req.method === 'POST') {
     const result = await pollNow(false);
     const payload = buildStatePayload(currentMode);
@@ -499,22 +453,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Deep History Sample Expansion API (crawl older days preceding current oldest stored draw)
   if (pathname === '/api/expand-history' && req.method === 'POST') {
-    const rawDays = parseInt(urlObj.searchParams.get('days') || '2', 10);
-    const rawPages = parseInt(urlObj.searchParams.get('pages') || '8', 10);
-    const days = Math.min(5, Math.max(1, Number.isNaN(rawDays) ? 2 : rawDays));
-    const pages = Math.min(10, Math.max(5, Number.isNaN(rawPages) ? 8 : rawPages));
-    const result = await expandHistoryNow(days, pages);
+    const rawBatches = parseInt(urlObj.searchParams.get('batches') || '15', 10);
+    const batches = Math.min(30, Math.max(5, Number.isNaN(rawBatches) ? 15 : rawBatches));
+    const result = await expandHistoryNow(batches);
     const payload = buildStatePayload(currentMode);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ...payload, refreshResult: result }));
     return;
   }
 
-  // Static files
   let filePath = pathname === '/' ? path.join(PUBLIC_DIR, 'index.html') : path.join(PUBLIC_DIR, pathname);
-  // Prevent directory traversal
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403);
     res.end('Forbidden');
@@ -532,17 +481,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// Initialize
 loadHistoryFromDisk();
 recomputeAnalysis();
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n======================================================`);
-  console.log(`🎯 KENO 80 LIVE PREDICTOR SERVER RUNNING`);
+  console.log(`🎲 VIETLOTT BINGO18 LIVE ANALYTICS & PREDICTOR RUNNING`);
   console.log(`🌐 Mở trình duyệt tại: http://localhost:${PORT}`);
   console.log(`======================================================\n`);
-  // Trigger initial multi-page crawl in background
   pollNow(true);
   startSmartPollingLoop();
 });
-

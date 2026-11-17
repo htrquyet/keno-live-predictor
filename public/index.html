@@ -3,239 +3,470 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Keno 80 Live Predictor — Phân Tích & Dự Đoán Bậc 2–5 Trực Tiếp</title>
+  <title>Vietlott Bingo18 Live — Tính Kết Quả, Thống Kê Chu Kỳ & Dự Báo Điểm Rơi</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <!-- Toast Notification for New Draw -->
-  <div id="toastContainer" class="toast-container"></div>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
 
-  <!-- Top Header -->
-  <header class="app-header">
-    <div class="header-left">
-      <div class="brand-logo">K80</div>
-      <div>
-        <h1 class="app-title">KENO 80 LIVE PREDICTOR <span class="badge-pro">BẬC 2–5 AI</span></h1>
-        <p class="app-subtitle">Tự động bắt kết quả kỳ quay trực tiếp · Đa thuật toán Markov & Chu kỳ · Tự học trọng số</p>
-      </div>
-    </div>
-
-    <div class="header-center">
-      <div class="countdown-box" id="countdownBox">
-        <div class="countdown-label">
-          <span id="nextDrawTitle">KỲ TIẾP THEO <strong id="headerNextDrawId">#---</strong></span>
-          <span class="draw-clock-target" id="headerNextDrawTime">--:--</span>
+  <!-- Top Navigation & Live Status Bar -->
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-logo">B18</div>
+        <div>
+          <div class="brand-title-row">
+            <h1>Vietlott Bingo18 Live Analytics</h1>
+            <span class="badge badge-accent">3 Xúc Xắc (1–6) · 6 Phút/Kỳ</span>
+          </div>
+          <p class="brand-subtitle">
+            Tính thưởng tự động · Thống kê 6 mặt, Trùng đôi, Bão, 16 Tổng · Dự báo điểm rơi (06:05 – 21:53)
+          </p>
         </div>
-        <div class="countdown-timer" id="countdownTimer">00:00</div>
-        <div class="countdown-status" id="countdownSubStatus">Chu kỳ 8 phút/kỳ (06:00 – 21:52)</div>
       </div>
-    </div>
 
-    <div class="header-right">
-      <div class="live-status-pill" id="liveStatusPill">
-        <span class="pulse-dot" id="pulseDot"></span>
-        <span id="pollStatusText">Đang kết nối...</span>
-      </div>
-      <div class="header-actions">
-        <button id="btnSoundToggle" class="btn-secondary" title="Bật/tắt âm báo khi có kết quả kỳ mới">
-          🔔 Âm báo: BẬT
+      <div class="topbar-controls">
+        <div class="status-pill" id="connectionBadge">
+          <span class="pulse-dot" id="statusDot"></span>
+          <span id="statusText">Đang kết nối...</span>
+        </div>
+
+        <div class="countdown-box">
+          <div class="countdown-meta">
+            <span class="countdown-label" id="countdownLabel">Đếm ngược kỳ</span>
+            <strong class="countdown-draw" id="nextTargetId">#------</strong>
+          </div>
+          <div class="countdown-timer" id="countdownValue">--:--</div>
+          <div class="countdown-sub" id="nextExpectedTime">Giờ quay: --:--</div>
+        </div>
+
+        <button class="btn btn-icon" id="soundToggleBtn" title="Bật/Tắt âm báo khi có kết quả Bingo18 mới">
+          🔔 Âm báo: Bật
         </button>
-        <button id="btnExpandHistory" class="btn-secondary" title="Tải thêm các kỳ quay lịch sử trước đó để mở rộng mẫu tính toán">
-          📥 Mở Rộng Mẫu (+Kỳ Cũ)
+
+        <button class="btn btn-refresh" id="refreshBtn" title="Quét kết quả Bingo18 mới nhất ngay lập tức">
+          <span class="refresh-icon">🔄</span> Quét Kỳ Mới
         </button>
-        <button id="btnRefreshNow" class="btn-primary">
-          🔄 Quét Kết Quả Ngay
+
+        <button class="btn btn-expand" id="expandHistoryBtn" title="Tải thêm ~150 kỳ lịch sử Bingo18 cũ hơn để tăng độ sâu thống kê">
+          <span>📥</span> +150 Kỳ Mẫu
         </button>
       </div>
     </div>
   </header>
 
-  <main class="dashboard-container">
-    <!-- ROW 1: Latest Result + 80-Ball Board (Left) & Next Draw Prediction Bậc 2-5 (Right) -->
-    <section class="grid-two-col">
-      <!-- Left Card: Latest Draw Result & 80 Ball Matrix -->
-      <div class="card">
+  <main class="container main-content">
+    <!-- ROW 1: Latest Result + Winning Doors Breakdown (Left) & Next Draw Point-of-Fall Predictions (Right) -->
+    <section class="hero-grid">
+      <!-- LEFT: Latest Bingo18 Draw Result & Winning Doors Calculator -->
+      <div class="card card-latest">
         <div class="card-header">
           <div>
-            <h2 class="card-title">🔴 KẾT QUẢ KỲ QUAY MỚI NHẤT</h2>
-            <p class="card-sub" id="latestDrawMeta">Đang tải dữ liệu...</p>
-          </div>
-          <div class="latest-badges" id="latestDrawBadges">
-            <span class="stat-pill">Chẵn: --</span>
-            <span class="stat-pill">Lẻ: --</span>
-            <span class="stat-pill">Lớn: --</span>
-            <span class="stat-pill">Nhỏ: --</span>
-          </div>
-        </div>
-
-        <!-- 20 Drawn Balls -->
-        <div class="latest-balls-wrapper">
-          <div class="latest-balls-grid" id="latestBallsGrid">
-            <!-- Populated by JS -->
-          </div>
-          <div class="latest-hit-banner" id="latestHitBanner">
-            <!-- Shows how many of previous prediction hit in this draw -->
-          </div>
-        </div>
-
-        <!-- 80-Ball Interactive Matrix -->
-        <div class="board80-section">
-          <div class="board80-header">
-            <span class="section-label">MA TRẬN 80 BÓNG KENO (01 – 80)</span>
-            <div class="board-legend">
-              <span class="legend-item"><i class="dot-legend dot-drawn"></i> Vừa nổ (20 số)</span>
-              <span class="legend-item"><i class="dot-legend dot-predicted"></i> Dự đoán Bậc 5 kỳ tới</span>
-              <span class="legend-item"><i class="dot-legend dot-both"></i> Vừa nổ + Dự đoán rơi lại</span>
+            <span class="eyebrow">KẾT QUẢ BINGO18 KỲ MỚI NHẤT</span>
+            <div class="latest-title-row">
+              <h2 id="latestDrawId">Kỳ #------</h2>
+              <span class="draw-date" id="latestDrawMeta">--/--/---- · --:--</span>
             </div>
           </div>
-          <div class="board80-grid" id="board80Grid">
-            <!-- 80 balls rendered by JS -->
+          <div class="source-tag" id="sampleCountBadge">Mẫu: 0 kỳ</div>
+        </div>
+
+        <!-- 3 Big Dice/Balls + Total Sum Display -->
+        <div class="dice-stage">
+          <div class="dice-trio" id="latestBallsGrid">
+            <div class="dice-card skeleton"></div>
+            <div class="dice-card skeleton"></div>
+            <div class="dice-card skeleton"></div>
+          </div>
+          <div class="sum-orb-wrap">
+            <span class="sum-equals">=</span>
+            <div class="sum-orb" id="latestSumOrb">
+              <span class="sum-orb-label">TỔNG</span>
+              <strong class="sum-orb-val" id="latestSumValue">--</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Classification Badges -->
+        <div class="latest-badges-row" id="latestBadgesRow">
+          <span class="result-badge">--</span>
+        </div>
+
+        <!-- Winning Doors Payout Breakdown for this Draw -->
+        <div class="winning-doors-box">
+          <div class="section-mini-header">
+            <span>💰 BẢNG CÁC CỬA TRÚNG THƯỞNG KỲ NÀY (VÉ 10.000Đ)</span>
+            <span class="mini-note" id="latestSlotBadge">Kỳ --/159 trong ngày</span>
+          </div>
+          <div class="winning-doors-grid" id="latestWinningDoorsGrid">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <!-- Instant Reconciliation Banner for Latest Draw -->
+        <div class="reconcile-banner" id="latestReconcileBanner">
+          <span>Đang đối soát kết quả dự báo kỳ vừa nổ...</span>
+        </div>
+
+        <!-- 24-Draw Lớn / Hòa / Nhỏ Road-Map -->
+        <div class="roadmap-box">
+          <div class="section-mini-header">
+            <span>🧭 CẦU LỚN (L) · HÒA (H) · NHỎ (N) — 24 KỲ GẦN NHẤT</span>
+            <div class="lhn-quick-stats" id="lhnStatsQuickRow">Lớn: --% · Hòa: --% · Nhỏ: --%</div>
+          </div>
+          <div class="roadmap-strip" id="lhnRoadmapRow">
+            <!-- 24 beads populated by JS -->
           </div>
         </div>
       </div>
 
-      <!-- Right Card: Next Draw Prediction (Bậc 2 - Bậc 5 Specialist) -->
-      <div class="card card-highlight">
+      <!-- RIGHT: Transparent Suggestions for Next Draw -->
+      <div class="card card-prediction">
         <div class="card-header">
           <div>
-            <h2 class="card-title">🎯 DỰ ĐOÁN CHUỖI SỐ KỲ TIẾP THEO <span class="next-ky-badge" id="predNextDrawId">#---</span></h2>
-            <p class="card-sub">Cửa sổ tích lũy mở rộng: Đang tính trên toàn bộ <strong id="predSampleSize" style="color:#38bdf8;">--</strong> kỳ (tự động tăng N → N+1 sau mỗi kỳ)</p>
+            <span class="eyebrow eyebrow-gold">GỢI Ý THAM KHẢO THEO THỐNG KÊ</span>
+            <div class="latest-title-row">
+              <h2>Gợi Ý Kỳ <span class="highlight-gold" id="predNextDrawId">#------</span></h2>
+              <span class="pred-badge">Chỉ tham khảo · Xác suất chuẩn 42.13%</span>
+            </div>
           </div>
-          <div class="strategy-selector">
-            <label for="strategySelect">Trường phái:</label>
-            <select id="strategySelect" class="select-input">
-              <option value="adaptive">🧠 Đa Thuật Toán Tự Học (Khuyên dùng)</option>
-              <option value="markov">🔗 Ưu Tiên Ma Trận Kéo Theo (Markov)</option>
-              <option value="hot">🔥 Ưu Tiên Cầu Bệt & Số Nóng</option>
-              <option value="due">⏳ Ưu Tiên Điểm Rơi Chu Kỳ Gan</option>
+
+          <div class="mode-selector">
+            <label for="modeSelect">Quy tắc:</label>
+            <select id="modeSelect">
+              <option value="cold">❄️ Mặt ra ít nhất 10 kỳ</option>
+              <option value="hot">🔥 Mặt ra nhiều nhất 30 kỳ</option>
+              <option value="gap">⏳ Mặt gan lâu nhất</option>
             </select>
           </div>
         </div>
 
-        <!-- 4 VIP Tier Cards (Bậc 2, Bậc 3, Bậc 4, Bậc 5) -->
-        <div class="tiers-grid" id="tiersGrid">
-          <!-- Populated by JS -->
+        <div class="honest-notice" id="strategyNoticeBanner">
+          ℹ️ Mỗi kỳ Bingo18 độc lập như 3 xúc xắc công bằng: xác suất lý thuyết luôn là <strong>42.13%</strong> (RTP <strong>56.94%</strong>). Tỷ lệ hiển thị bên dưới được đo trực tiếp bằng walk-forward trên lịch sử.
         </div>
 
-        <!-- Top 4 Disjoint Synergy Pairs for Bậc 2 -->
-        <div class="synergy-section">
-          <div class="section-header-row">
-            <span class="section-label">⚡ DÀN TOP 4 CẶP SONG THỦ ĐỘC LẬP (8 SỐ KHÔNG TRÙNG)</span>
-            <span class="section-hint">Ghép 4 cặp độc lập từ Top 8 số nóng điểm cao nhất ([1-2], [3-4], [5-6], [7-8]) để tối đa tỷ lệ nổ thực tế</span>
+        <!-- Top 3 Face Picks: Độc Thủ 1 Số, Song Thủ 2 Số, Tam Thủ 3 Số -->
+        <div class="vip-faces-grid">
+          <div class="vip-card vip-single">
+            <div class="vip-card-top">
+              <span class="vip-tag">👑 ĐỘC THỦ 1 SỐ</span>
+              <span class="vip-conf" id="singleVipConf">Chuẩn: 42.13%</span>
+            </div>
+            <div class="vip-main-row">
+              <div class="vip-dice-group" id="singleVipFace">
+                <span class="vip-die">-</span>
+              </div>
+              <div class="vip-meta">
+                <div class="vip-status" id="singleVipNote">Đang phân tích...</div>
+                <div class="vip-payout">1 nháy: x1.2 · 2 nháy: x2 · 3 nháy: x3</div>
+              </div>
+            </div>
           </div>
-          <div class="pairs-grid" id="topPairsGrid">
-            <!-- Populated by JS -->
+
+          <div class="vip-card vip-pair">
+            <div class="vip-card-top">
+              <span class="vip-tag">⚡ SONG THỦ 2 SỐ</span>
+              <span class="vip-conf" id="pairVipConf">Chuẩn: 70.37%</span>
+            </div>
+            <div class="vip-main-row">
+              <div class="vip-dice-group" id="pairVipFaces">
+                <span class="vip-die">-</span>
+                <span class="vip-die">-</span>
+              </div>
+              <div class="vip-meta">
+                <div class="vip-status" id="pairVipNote">Có mặt ≥1 số: --% · Hòa/Lãi ≥20k: --%</div>
+                <div class="vip-payout">Bao 2 mặt (20k/kỳ) · Chuẩn lãi ≥20k: 37.04%</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="vip-card vip-triple">
+            <div class="vip-card-top">
+              <span class="vip-tag">🛡️ TAM THỦ 3 SỐ BAO VÂY</span>
+              <span class="vip-conf" id="tripleCoverConf">Chuẩn: 87.5%</span>
+            </div>
+            <div class="vip-main-row">
+              <div class="vip-dice-group" id="tripleCoverFaces">
+                <span class="vip-die">-</span>
+                <span class="vip-die">-</span>
+                <span class="vip-die">-</span>
+              </div>
+              <div class="vip-meta">
+                <div class="vip-status" id="tripleCoverNote">Xác suất lý thuyết có ≥1 mặt: 87.5%</div>
+                <div class="vip-payout">Top 3 mặt theo quy tắc đang chọn</div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- Parity & Size Prediction -->
-        <div class="parity-size-grid" id="paritySizeGrid">
-          <!-- Populated by JS -->
+        <!-- Secondary Suggestions: Lớn/Hòa/Nhỏ + Top 2 Cặp Trùng Đôi + Dàn 4 Tổng Vàng -->
+        <div class="secondary-preds-grid">
+          <!-- Cầu Lớn / Hòa / Nhỏ -->
+          <div class="subpred-box">
+            <div class="subpred-header">
+              <span>⚖️ LỚN / HÒA / NHỎ (THEO 20 KỲ GẦN)</span>
+              <span class="subpred-conf" id="lhnPredConf">Chuẩn: 62.5%</span>
+            </div>
+            <div class="lhn-pred-main-row">
+              <div class="lhn-main-pill" id="lhnPredMain">--</div>
+              <div class="lhn-cover-pill" id="lhnPredCover">Bọc Hòa (10–11): --</div>
+            </div>
+            <div class="lhn-prob-bar" id="lhnPredProbs">
+              Đo thực tế: --% · Lý thuyết: 62.5%
+            </div>
+            <p class="subpred-reason" id="lhnPredReason">Đang tính nhịp cầu...</p>
+          </div>
+
+          <!-- Top 2 Cặp Trùng Đôi & Dàn 4 Tổng Vàng -->
+          <div class="subpred-box">
+            <div class="subpred-header">
+              <span>🎲 ĐÔI GAN LÂU & 4 TỔNG XÁC SUẤT CAO</span>
+              <span class="subpred-conf">Tổng 9,10,11,12 (48.15%)</span>
+            </div>
+            <div class="double-vip-row" id="doubleVipList">
+              <!-- Populated by JS -->
+            </div>
+            <div class="sum-vip-divider"></div>
+            <div class="sum-vip-row" id="sumVipList">
+              <!-- Populated by JS -->
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- ROW 2: Adaptive Weights + Top 12 Ranked Numbers + Hot/Cold/Zones -->
-    <section class="grid-three-col">
-      <!-- Column 1: Self-Learning Algorithm Weights & Zone Distribution -->
+    <!-- ROW 2: Interactive Ticket Prize Calculator & Historical Ticket Checker -->
+    <section class="card card-calculator">
+      <div class="card-header">
+        <div>
+          <span class="eyebrow eyebrow-cyan">CÔNG CỤ TÍNH TIỀN THƯỞNG & DÒ VÉ BINGO18 TRÊN LỊCH SỬ</span>
+          <h2>Máy Tính Vé Bingo18 & Kiểm Định Lãi/Lỗ Thực Tế</h2>
+        </div>
+        <button class="btn btn-ai-fill" id="calcApplyAiBtn" title="Tự động điền bộ số gợi ý theo quy tắc đang chọn vào máy tính vé">
+          ✨ Nạp Bộ Số Gợi Ý Vào Vé
+        </button>
+      </div>
+
+      <div class="calculator-grid">
+        <!-- Left Controls: Choose Play Type, Options, Stake, and Backtest Window -->
+        <div class="calc-controls">
+          <div class="calc-form-row">
+            <div class="calc-field">
+              <label for="calcPlayType">1. Chọn hình thức chơi Bingo18:</label>
+              <select id="calcPlayType">
+                <option value="SINGLE">Một Số (1..6) — Nổ 1 nháy x1.2 · 2 nháy x2.0 · 3 nháy x3.0</option>
+                <option value="LHN">Lớn (12–18) · Hòa (10–11) · Nhỏ (3–9) — Thưởng x1.5 / x2.0</option>
+                <option value="SUM">Cộng Tổng (3..18) — Thưởng từ x4.4 đến x120</option>
+                <option value="DOUBLE">Hai Số Trùng (11..66) — Thưởng x7.5 (75.000đ/10k)</option>
+                <option value="TRIPLE">Ba Số Trùng (Bão 111..666 / Bất kỳ) — Thưởng x20 đến x120</option>
+              </select>
+            </div>
+
+            <div class="calc-field calc-field-small">
+              <label for="calcStakeSelect">2. Mệnh giá mỗi cửa:</label>
+              <select id="calcStakeSelect">
+                <option value="10000">10.000đ / cửa</option>
+                <option value="20000">20.000đ / cửa</option>
+                <option value="50000">50.000đ / cửa</option>
+                <option value="100000">100.000đ / cửa</option>
+                <option value="200000">200.000đ / cửa</option>
+                <option value="500000">500.000đ / cửa</option>
+              </select>
+            </div>
+
+            <div class="calc-field calc-field-small">
+              <label for="calcBacktestRange">3. Khung dò thử lịch sử:</label>
+              <select id="calcBacktestRange">
+                <option value="50">50 kỳ gần nhất</option>
+                <option value="100" selected>100 kỳ gần nhất</option>
+                <option value="200">200 kỳ gần nhất</option>
+                <option value="9999">Toàn bộ lịch sử đang có</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="calc-chips-wrap">
+            <div class="calc-chips-label">
+              <span>4. Chọn các cửa muốn mua trên vé (Có thể chọn nhiều cửa để bao vây):</span>
+              <span class="calc-selected-count" id="calcSelectedCount">Đã chọn: 1 cửa</span>
+            </div>
+            <div class="calc-chips-grid" id="calcOptionChips">
+              <!-- Populated dynamically by JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Output: Ticket Cost, Payout Structure & Historical Backtest Result -->
+        <div class="calc-results">
+          <div class="calc-kpi-row">
+            <div class="calc-kpi">
+              <span>Tổng tiền vé / kỳ</span>
+              <strong id="calcTotalCost">10.000đ</strong>
+            </div>
+            <div class="calc-kpi">
+              <span>Xác suất trúng lý thuyết</span>
+              <strong class="text-cyan" id="calcTheoProb">42.13%</strong>
+            </div>
+            <div class="calc-kpi">
+              <span>Thưởng tối đa / kỳ</span>
+              <strong class="text-gold" id="calcMaxPrize">30.000đ</strong>
+            </div>
+          </div>
+
+          <div class="calc-payout-note" id="calcPayoutBreakdown">
+            <!-- Payout structure details -->
+          </div>
+
+          <div class="calc-bt-box" id="calcBacktestSummary">
+            <!-- Populated by JS: Win rate, total spent, total won, net profit/loss, RTP -->
+          </div>
+
+          <div class="calc-hits-strip" id="calcBacktestHitsList">
+            <!-- Recent draws where this user ticket won -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ROW 3: 3-Column Deep Statistical Suite -->
+    <section class="stats-triple-grid">
+      <!-- COL 1: 6-Face Detailed Statistics & AI Weights -->
       <div class="card">
         <div class="card-header">
           <div>
-            <h2 class="card-title">⚙️ TRỌNG SỐ ĐA THUẬT TOÁN (TỰ HỌC)</h2>
-            <p class="card-sub">Tự động điều chỉnh trọng số sau mỗi kỳ dựa trên độ chính xác thực tế</p>
+            <span class="eyebrow">THỐNG KÊ 6 MẶT XÚC XẮC (1..6)</span>
+            <h3>Tần Suất, Số Nháy & Chu Kỳ Gan</h3>
           </div>
-        </div>
-        <div class="weights-list" id="weightsList">
-          <!-- Populated by JS -->
+          <span class="badge-mini">Chuẩn lý thuyết: 42.13%/kỳ</span>
         </div>
 
-        <div class="zones-section">
-          <span class="section-label">📊 MẬT ĐỘ 8 VÙNG ĐẦU SỐ (5 KỲ GẦN NHẤT)</span>
-          <div class="zones-bars" id="zonesBars">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Mặt</th>
+                <th>Kỳ nổ (%)</th>
+                <th>1N / 2N / 3N</th>
+                <th>Gan (Max)</th>
+                <th>10k / 30k</th>
+                <th>Hạng</th>
+              </tr>
+            </thead>
+            <tbody id="faceStatsTableBody">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+
+        <div class="weights-panel">
+          <div class="section-mini-header">
+            <span>📊 ĐỐI CHIẾU CÁC QUY TẮC VS ĐỐI CHỨNG (CHUẨN 42.13%)</span>
+          </div>
+          <div id="weightsBarContainer" class="weights-bars">
             <!-- Populated by JS -->
           </div>
         </div>
       </div>
 
-      <!-- Column 2: Top 12 Highest Scored Numbers Breakdown -->
+      <!-- COL 2: Doubles (11..66) & Triples (111..666) Cycle & Gap Tracker -->
       <div class="card">
         <div class="card-header">
           <div>
-            <h2 class="card-title">🏆 TOP 12 CON SỐ ĐIỂM CAO NHẤT KỲ TỚI</h2>
-            <p class="card-sub">Chi tiết điểm thành phần của từng số được máy chấm</p>
+            <span class="eyebrow">CHU KỲ TRÙNG ĐÔI (x7.5) & BÃO (x20–x120)</span>
+            <h3>Soi Gan Hai Số Trùng & Ba Số Trùng</h3>
           </div>
+          <span class="badge-mini">Chu kỳ Đôi: 13.5k · Bão: 36k</span>
         </div>
-        <div class="table-scroll">
-          <table class="data-table compact-table table-top12">
+
+        <!-- Summary banner for Any Double & Any Triple -->
+        <div class="double-triple-summary" id="doubleTripleSummaryRow">
+          <!-- Populated by JS -->
+        </div>
+
+        <div class="table-wrap">
+          <table class="data-table">
             <thead>
               <tr>
-                <th>Hạng</th>
-                <th>Số</th>
-                <th>Điểm Tổng</th>
-                <th>Tin Cậy</th>
-                <th>Tần Suất (Toàn Mẫu / 10k)</th>
-                <th>Chu Kỳ / Gan</th>
-                <th>Trạng Thái Phong Độ</th>
+                <th>Cặp Đôi</th>
+                <th>Số lần (%)</th>
+                <th>Chu kỳ TB</th>
+                <th>Gan (Max)</th>
+                <th>Nhịp Điểm Rơi</th>
               </tr>
             </thead>
-            <tbody id="top12TableBody">
+            <tbody id="doublesTableBody">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section-mini-header" style="margin-top: 12px;">
+          <span>🌪️ THỐNG KÊ 6 CỬA BÃO CỤ THỂ (111..666 — THƯỞNG 1.200.000Đ/10K)</span>
+        </div>
+        <div class="triples-mini-grid" id="triplesTableBody">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- COL 3: 16 Sums (3..18) Distribution, Payouts & Gap Tracker -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <span class="eyebrow">PHÂN BỔ 16 MỨC CỘNG TỔNG (3..18)</span>
+            <h3>Tần Suất, Mức Thưởng & Gan 16 Tổng</h3>
+          </div>
+          <span class="badge-mini">Tổng không gian: 216 tổ hợp</span>
+        </div>
+
+        <div class="table-wrap table-scroll-sums">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Tổng</th>
+                <th>Thưởng (10k)</th>
+                <th>Đã về (%)</th>
+                <th>Lý thuyết</th>
+                <th>Gan / Chu kỳ (Max)</th>
+              </tr>
+            </thead>
+            <tbody id="sumsTableBody">
               <!-- Populated by JS -->
             </tbody>
           </table>
         </div>
       </div>
-
-      <!-- Column 3: Hot / Cold / Streak Numbers -->
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h2 class="card-title">🔥 THỐNG KÊ NHỊP CẦU NÓNG / LẠNH / BỆT</h2>
-            <p class="card-sub">Phân tích trên <span id="statTotalDraws">--</span> kỳ quay gần nhất</p>
-          </div>
-        </div>
-
-        <div class="stat-group">
-          <div class="stat-group-title">🔥 Số Nóng (Về nhiều nhất trên toàn mẫu tích lũy)</div>
-          <div class="mini-balls-list" id="hotNumbersList"></div>
-        </div>
-
-        <div class="stat-group">
-          <div class="stat-group-title">🔁 Cầu Bệt (Đang nổ liên tiếp >= 2 kỳ)</div>
-          <div class="mini-balls-list" id="streakNumbersList"></div>
-        </div>
-
-        <div class="stat-group">
-          <div class="stat-group-title">❄️ Số Lạnh / Gan (Lâu chưa xuất hiện nhất)</div>
-          <div class="mini-balls-list" id="coldNumbersList"></div>
-        </div>
-      </div>
     </section>
 
-    <!-- ROW 3: Walk-Forward Backtest Verification & Recent Draw History -->
-    <section class="grid-two-col-bottom">
-      <!-- Walk-Forward Backtest Verification -->
+    <!-- ROW 4: Walk-Forward Backtest Reconciliation & Recent Draw History -->
+    <section class="bottom-dual-grid">
+      <!-- LEFT: Walk-Forward Backtest & RTP Verification -->
       <div class="card">
         <div class="card-header">
           <div>
-            <h2 class="card-title">✅ ĐỐI SOÁT THỰC TẾ &amp; CHỈ SỐ RTP (CỬA SỔ MỞ RỘNG N → N+1)</h2>
-            <p class="card-sub">Theo dõi cả Cặp VIP #1 lẫn Dàn 4 Cặp Độc Lập và tỷ lệ hoàn vốn RTP (%) theo từng chế độ chiến lược</p>
+            <span class="eyebrow">KIỂM ĐỊNH ĐỘ CHÍNH XÁC (WALK-FORWARD BACKTEST)</span>
+            <h3>Đối Soát Dự Báo Thực Tế Qua Từng Kỳ</h3>
           </div>
-          <div class="backtest-summary-badges" id="backtestSummaryBadges">
-            <!-- Populated by JS -->
-          </div>
+          <span class="badge-mini" id="btEvalCountBadge">Đã đối soát: -- kỳ</span>
         </div>
 
-        <div class="table-scroll">
-          <table class="data-table table-backtest">
+        <div class="bt-kpi-grid" id="btSummaryGrid">
+          <!-- Populated by JS -->
+        </div>
+
+        <div class="table-wrap table-scroll">
+          <table class="data-table">
             <thead>
               <tr>
-                <th>Kỳ Quay</th>
-                <th>Bậc 2 (VIP #1)</th>
-                <th>Dàn 4 Cặp Độc Lập</th>
-                <th>Bậc 3</th>
-                <th>Bậc 4</th>
-                <th>Bậc 5</th>
-                <th>Kết Quả Đối Soát</th>
+                <th>Kỳ (Giờ)</th>
+                <th>Kết Quả (Tổng)</th>
+                <th>Độc Thủ 1 Số</th>
+                <th>Song Thủ 2 Số</th>
+                <th>Cầu L/N + Hòa</th>
+                <th>Dàn 4 Tổng</th>
               </tr>
             </thead>
             <tbody id="backtestTableBody">
@@ -245,22 +476,26 @@
         </div>
       </div>
 
-      <!-- Full Recent Draw History -->
+      <!-- RIGHT: Recent Bingo18 Draw History -->
       <div class="card">
         <div class="card-header">
           <div>
-            <h2 class="card-title">📜 LỊCH SỬ CÁC KỲ QUAY GẦN NHẤT</h2>
-            <p class="card-sub">Cập nhật tự động ngay khi kỳ quay kết thúc</p>
+            <span class="eyebrow">LỊCH SỬ KẾT QUẢ BINGO18 TRỰC TIẾP</span>
+            <h3>50 Kỳ Quay Bingo18 Gần Nhất</h3>
           </div>
+          <span class="badge-mini" id="lastPollTimeLabel">Cập nhật: --:--</span>
         </div>
-        <div class="table-scroll">
-          <table class="data-table table-history">
+
+        <div class="table-wrap table-scroll">
+          <table class="data-table">
             <thead>
               <tr>
-                <th>Kỳ</th>
-                <th>Giờ</th>
-                <th>20 Số Kết Quả</th>
-                <th>Chẵn/Lẻ · Lớn/Nhỏ</th>
+                <th>Kỳ Quay</th>
+                <th>Ngày · Giờ</th>
+                <th>3 Xúc Xắc</th>
+                <th>Tổng</th>
+                <th>Lớn / Hòa / Nhỏ</th>
+                <th>Dạng Số</th>
               </tr>
             </thead>
             <tbody id="historyTableBody">
@@ -272,7 +507,13 @@
     </section>
   </main>
 
+  <footer class="footer">
+    <div class="container footer-inner">
+      <span>Vietlott Bingo18 Live Analytics & Calculator — Dữ liệu thực tế đồng bộ trực tiếp (06:05 – 21:53, 6 phút/kỳ).</span>
+      <span>Mọi phân tích xác suất & điểm rơi phục vụ mục đích thống kê tham khảo.</span>
+    </div>
+  </footer>
+
   <script src="/app.js"></script>
 </body>
 </html>
-

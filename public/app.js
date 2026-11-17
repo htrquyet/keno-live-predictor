@@ -268,12 +268,16 @@ function renderAll(state) {
       const chipB3 = `<span class="${b3.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 3: <strong>${b3.hitCount}/3</strong>${b3.prize > 0 ? ' 🏆' : ''}</span>`;
       const chipB4 = `<span class="${b4.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 4: <strong>${b4.hitCount}/4</strong>${b4.prize > 0 ? ' 🏆' : ''}</span>`;
       const chipB5 = `<span class="${b5.prize > 0 ? 'prize-win' : 'stat-pill'}">Bậc 5: <strong>${b5.hitCount}/5</strong>${b5.prize > 0 ? ' 🏆' : ''}</span>`;
+      const psBt = latestBacktest.paritySize;
+      const chipPS = psBt
+        ? `<span class="${psBt.parityCoverWon ? 'prize-win' : 'stat-pill'}">Chẵn/Lẻ: <strong>${psBt.parityExactWon ? 'Trúng chính diện' : psBt.parityCoverWon ? 'Nổ Hòa 10-10' : 'Trượt'}</strong>${psBt.parityCoverWon ? ' 🏆' : ''}</span> <span class="${psBt.sizeCoverWon ? 'prize-win' : 'stat-pill'}">Lớn/Nhỏ: <strong>${psBt.sizeExactWon ? 'Trúng chính diện' : psBt.sizeCoverWon ? 'Nổ Hòa 10-10' : 'Trượt'}</strong>${psBt.sizeCoverWon ? ' 🏆' : ''}</span>`
+        : '';
 
       hitBanner.innerHTML = `
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:100%;">
           <span>🎯 Đối soát kỳ <strong>#${latest.drawId}</strong> (Mẫu: <strong>${latestBacktest.sampleSizeUsed || analysis.totalHistoricalDraws - 1} kỳ</strong>):</span>
           <div style="display:inline-flex;gap:6px;flex-wrap:wrap;">
-            ${chipB2} ${chipT4} ${chipB3} ${chipB4} ${chipB5}
+            ${chipB2} ${chipT4} ${chipB3} ${chipB4} ${chipB5} ${chipPS}
           </div>
           ${
             t4Prize > 0 || singlePrize > 0
@@ -365,24 +369,67 @@ function renderAll(state) {
     )
     .join('');
 
-  // 5. Parity & Size Prediction
+  // 5. Parity & Size Prediction (Chẵn/Lẻ/Hòa & Lớn/Nhỏ/Hòa)
   const ps = analysis.parityAndSize;
+  const btSumForPs = analysis.backtestSummary || {};
   document.getElementById('paritySizeGrid').innerHTML = `
     <div class="ps-box">
       <div class="ps-header">
-        <span>CẦU CHẴN / LẺ KỲ #${analysis.nextDrawId}</span>
-        <span style="color:#34d399;font-weight:700;">${ps.parityConfidence}%</span>
+        <span>☯️ CẦU CHẴN / LẺ / HÒA KỲ #${analysis.nextDrawId}</span>
+        <span style="color:#34d399;font-weight:700;">Tin cậy: ${ps.parityConfidence}%</span>
       </div>
       <div class="ps-pick">${ps.parityPick}</div>
+      ${
+        ps.parityComboPick
+          ? `<div style="font-size:12px;font-weight:700;color:#38bdf8;margin:4px 0;">🎯 ${ps.parityComboPick}</div>`
+          : ''
+      }
+      ${
+        ps.parityTieStatus
+          ? `<div style="font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:6px;display:inline-block;margin:3px 0;${
+              ps.parityTieAlert
+                ? 'background:rgba(245,158,11,0.2);color:#fde68a;border:1px solid rgba(245,158,11,0.45);'
+                : 'background:rgba(30,41,59,0.7);color:#94a3b8;border:1px solid #23314d;'
+            }">${ps.parityTieStatus}</div>`
+          : ''
+      }
       <div class="ps-reason">${ps.parityReason}</div>
+      ${
+        btSumForPs.parityCoverWinRate !== undefined
+          ? `<div style="font-size:11px;color:#cbd5e1;margin-top:6px;padding-top:6px;border-top:1px dashed #23314d;">
+              ✅ Đối soát thực tế: Chính diện <strong>${btSumForPs.parityExactWinRate}%</strong> · Bọc Hòa (≥10 số): <strong style="color:#34d399;">${btSumForPs.parityCoverWinRate}%</strong> · Cặp vé [11-12+Hòa]: <strong style="color:#38bdf8;">${btSumForPs.parity2DoorWinRate}% (RTP ${btSumForPs.parity2DoorRtp}%)</strong>
+            </div>`
+          : ''
+      }
     </div>
     <div class="ps-box">
       <div class="ps-header">
-        <span>CẦU LỚN / NHỎ KỲ #${analysis.nextDrawId}</span>
-        <span style="color:#34d399;font-weight:700;">${ps.sizeConfidence}%</span>
+        <span>⚖️ CẦU LỚN / NHỎ / HÒA KỲ #${analysis.nextDrawId}</span>
+        <span style="color:#34d399;font-weight:700;">Tin cậy: ${ps.sizeConfidence}%</span>
       </div>
       <div class="ps-pick">${ps.sizePick}</div>
+      ${
+        ps.sizeComboPick
+          ? `<div style="font-size:12px;font-weight:700;color:#fb923c;margin:4px 0;">🎯 ${ps.sizeComboPick}</div>`
+          : ''
+      }
+      ${
+        ps.sizeTieStatus
+          ? `<div style="font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:6px;display:inline-block;margin:3px 0;${
+              ps.sizeTieAlert
+                ? 'background:rgba(245,158,11,0.2);color:#fde68a;border:1px solid rgba(245,158,11,0.45);'
+                : 'background:rgba(30,41,59,0.7);color:#94a3b8;border:1px solid #23314d;'
+            }">${ps.sizeTieStatus}</div>`
+          : ''
+      }
       <div class="ps-reason">${ps.sizeReason}</div>
+      ${
+        btSumForPs.sizeCoverWinRate !== undefined
+          ? `<div style="font-size:11px;color:#cbd5e1;margin-top:6px;padding-top:6px;border-top:1px dashed #23314d;">
+              ✅ Đối soát thực tế: Chính diện <strong>${btSumForPs.sizeExactWinRate}%</strong> · Bọc Hòa (≥10 số): <strong style="color:#34d399;">${btSumForPs.sizeCoverWinRate}%</strong>
+            </div>`
+          : ''
+      }
     </div>
   `;
 
@@ -533,6 +580,16 @@ function renderAll(state) {
     <span class="bt-badge">Bậc 3: <strong>${b3Rate}%</strong> (RTP ${btSum.bac3Rtp ?? '--'}%)</span>
     <span class="bt-badge">Bậc 4: <strong>${b4Rate}%</strong> (RTP ${btSum.bac4Rtp ?? '--'}%)</span>
     <span class="bt-badge">Bậc 5: <strong>${b5Rate}%</strong> (RTP ${btSum.bac5Rtp ?? '--'}%)</span>
+    ${
+      btSum.parityCoverWinRate !== undefined
+        ? `<span class="bt-badge" style="background:rgba(16,185,129,0.14);color:#34d399;border-color:rgba(16,185,129,0.35);">Chẵn/Lẻ+Hòa: <strong>${btSum.parityCoverWinRate}%</strong> (Vé [11-12+Hòa]: <strong>${btSum.parity2DoorWinRate}% · RTP ${btSum.parity2DoorRtp}%</strong>)</span>`
+        : ''
+    }
+    ${
+      btSum.sizeCoverWinRate !== undefined
+        ? `<span class="bt-badge" style="background:rgba(251,146,60,0.14);color:#fb923c;border-color:rgba(251,146,60,0.35);">Lớn/Nhỏ+Hòa: <strong>${btSum.sizeCoverWinRate}%</strong> (Chính diện: <strong>${btSum.sizeExactWinRate}%</strong>)</span>`
+        : ''
+    }
   `;
 
   const renderTierCell = (tierObj) => {

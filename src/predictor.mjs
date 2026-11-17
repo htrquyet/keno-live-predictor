@@ -487,73 +487,180 @@ export function calculateKenoPrize(tier, hitCount) {
 }
 
 /**
- * Predict Parity (Chẵn/Lẻ) and Size (Lớn/Nhỏ) based on high-frequency numbers & equilibrium
+ * Predict Parity (Chẵn / Lẻ / Hòa 10-10) and Size (Lớn / Nhỏ / Hòa 10-10)
+ * using calibrated Hot-Ball Top-K composition + Multi-Window Non-Tie Regime + Tie (10-10) Cycle Detector.
  */
-export function predictParityAndSize(draws, topRanked) {
-  if (draws.length === 0) {
+export function predictParityAndSize(draws, topRanked = [], fastCounts = null) {
+  const N = draws.length;
+  if (N === 0) {
     return {
-      parityPick: 'Chẵn',
+      paritySide: 'EVEN',
+      parityPick: 'CHẴN CHỦ ĐẠO (≥11 số)',
+      parityComboPick: 'Chẵn 11–12 + Bọc Hòa (10–10)',
+      parityTieStatus: 'Đang thu thập dữ liệu',
+      parityTieAlert: false,
       parityConfidence: 60,
       parityReason: 'Đang thu thập dữ liệu',
-      sizePick: 'Lớn',
+      sizeSide: 'BIG',
+      sizePick: 'LỚN CHỦ ĐẠO (≥11 số)',
+      sizeComboPick: 'Lớn (≥11) + Bọc Hòa (10–10)',
+      sizeTieStatus: 'Đang thu thập dữ liệu',
+      sizeTieAlert: false,
       sizeConfidence: 60,
       sizeReason: 'Đang thu thập dữ liệu'
     };
   }
 
-  const recent10 = draws.slice(-10);
-  const top10Nums = topRanked.slice(0, 10).map((r) => r.number);
-  const top10Even = top10Nums.filter((n) => n % 2 === 0).length;
-  const top10Big = top10Nums.filter((n) => n > 40).length;
-
-  const avgEvenAll = draws.reduce((s, d) => s + d.evenCount, 0) / draws.length;
-  const avgBigAll = draws.reduce((s, d) => s + d.bigCount, 0) / draws.length;
-  const avgEven10 = recent10.reduce((s, d) => s + d.evenCount, 0) / recent10.length;
-  const avgBig10 = recent10.reduce((s, d) => s + d.bigCount, 0) / recent10.length;
-
-  const lastDraw = draws[draws.length - 1];
-
-  const evenSignal = (top10Even - 5) * 0.55 + (avgEvenAll - avgEven10) * 0.45;
-  let parityPick = 'Hòa (9-11)';
-  let parityConfidence = 68;
-  let parityReason = `Mẫu ${draws.length} kỳ TB ${avgEvenAll.toFixed(1)} Chẵn/kỳ (10 kỳ gần nhất: ${avgEven10.toFixed(1)}).`;
-
-  if (evenSignal >= 0.4) {
-    parityPick = 'Nghiêng CHẴN (11–13+ số)';
-    parityConfidence = Math.min(89, Math.round(67 + evenSignal * 10));
-    parityReason = `Top 10 số hay ra nhất có ${top10Even}/10 số Chẵn; mẫu ${draws.length} kỳ đang kéo nhịp về Chẵn (kỳ trước ${lastDraw.evenCount} Chẵn - ${lastDraw.oddCount} Lẻ).`;
-  } else if (evenSignal <= -0.4) {
-    parityPick = 'Nghiêng LẺ (11–13+ số)';
-    parityConfidence = Math.min(89, Math.round(67 + Math.abs(evenSignal) * 10));
-    parityReason = `Top 10 số hay ra nhất có ${10 - top10Even}/10 số Lẻ; mẫu ${draws.length} kỳ ưu tiên nhịp Lẻ (kỳ trước ${lastDraw.evenCount} Chẵn - ${lastDraw.oddCount} Lẻ).`;
-  } else {
-    parityPick = 'Cân Bằng / Hòa (9–11 số)';
-    parityReason = `Tỷ lệ Chẵn/Lẻ trên mẫu ${draws.length} kỳ rất cân bằng (${avgEvenAll.toFixed(1)} Chẵn : ${(20 - avgEvenAll).toFixed(1)} Lẻ).`;
+  // 1. Compute pure hot-frequency ball ranking (without fatigue penalty so macro wave is preserved)
+  let cAll = fastCounts?.countAll;
+  let c20 = fastCounts?.count20;
+  let c10 = fastCounts?.count10;
+  if (!cAll || !c20 || !c10) {
+    cAll = new Int32Array(81);
+    c20 = new Int32Array(81);
+    c10 = new Int32Array(81);
+    for (let i = 0; i < N; i++) {
+      const age = N - 1 - i;
+      for (const x of draws[i].numbers) {
+        cAll[x]++;
+        if (age < 20) c20[x]++;
+        if (age < 10) c10[x]++;
+      }
+    }
   }
 
-  const bigSignal = (top10Big - 5) * 0.55 + (avgBigAll - avgBig10) * 0.45;
-  let sizePick = 'Hòa (9-11)';
-  let sizeConfidence = 68;
-  let sizeReason = `Mẫu ${draws.length} kỳ TB ${avgBigAll.toFixed(1)} Lớn/kỳ (10 kỳ gần nhất: ${avgBig10.toFixed(1)}).`;
-
-  if (bigSignal >= 0.4) {
-    sizePick = 'Nghiêng LỚN (41–80)';
-    sizeConfidence = Math.min(89, Math.round(67 + bigSignal * 10));
-    sizeReason = `Top 10 số điểm cao nhất có ${top10Big}/10 số Lớn; mẫu ${draws.length} kỳ báo hiệu cầu Lớn (kỳ trước ${lastDraw.bigCount} Lớn - ${lastDraw.smallCount} Nhỏ).`;
-  } else if (bigSignal <= -0.4) {
-    sizePick = 'Nghiêng NHỎ (01–40)';
-    sizeConfidence = Math.min(89, Math.round(67 + Math.abs(bigSignal) * 10));
-    sizeReason = `Top 10 số điểm cao nhất có ${10 - top10Big}/10 số Nhỏ; mẫu ${draws.length} kỳ báo hiệu cầu Nhỏ (kỳ trước ${lastDraw.bigCount} Lớn - ${lastDraw.smallCount} Nhỏ).`;
-  } else {
-    sizePick = 'Cân Bằng Lớn/Nhỏ (9–11 số)';
-    sizeReason = `Phân bổ Lớn/Nhỏ trên mẫu ${draws.length} kỳ ổn định (${avgBigAll.toFixed(1)} Lớn : ${(20 - avgBigAll).toFixed(1)} Nhỏ).`;
+  const ballScores = [];
+  const d20 = Math.min(20, N);
+  const d10 = Math.min(10, N);
+  for (let n = 1; n <= 80; n++) {
+    const sc = (cAll[n] / N) * 30 + (c20[n] / d20) * 35 + (c10[n] / d10) * 35;
+    ballScores.push({ n, sc });
   }
+  ballScores.sort((a, b) => b.sc - a.sc);
+
+  const top20Even = ballScores.slice(0, 20).filter((x) => x.n % 2 === 0).length;
+  const top24Big = ballScores.slice(0, 24).filter((x) => x.n > 40).length;
+  const top20EvenRatio = top20Even / 20;
+  const top24BigRatio = top24Big / 24;
+
+  // 2. Multi-window non-tie regime rates: W=60 & W=15 for Parity; W=50 for Size
+  let e60 = 0, o60 = 0, e15 = 0, o15 = 0;
+  let b50 = 0, sm50 = 0;
+  let tieParityAll = 0, tieSizeAll = 0;
+  let parityTieGap = -1, sizeTieGap = -1;
+
+  for (let i = N - 1; i >= 0; i--) {
+    const age = N - 1 - i;
+    const ev = draws[i].evenCount;
+    const bg = draws[i].bigCount;
+
+    if (ev === 10) {
+      tieParityAll++;
+      if (parityTieGap === -1) parityTieGap = age;
+    } else if (ev >= 11) {
+      if (age < 60) e60++;
+      if (age < 15) e15++;
+    } else {
+      if (age < 60) o60++;
+      if (age < 15) o15++;
+    }
+
+    if (bg === 10) {
+      tieSizeAll++;
+      if (sizeTieGap === -1) sizeTieGap = age;
+    } else if (bg >= 11) {
+      if (age < 50) b50++;
+    } else {
+      if (age < 50) sm50++;
+    }
+  }
+  if (parityTieGap === -1) parityTieGap = N;
+  if (sizeTieGap === -1) sizeTieGap = N;
+
+  // Parity ensemble score (K=20 wBall=0.45 + W60(0.70)/W15(0.30) wRegime=0.55)
+  const regPE = 0.70 * (e60 / (e60 + o60 || 1)) + 0.30 * (e15 / (e15 + o15 || 1));
+  const regPO = 1 - regPE;
+  const scoreEven = 0.55 * regPE + 0.45 * top20EvenRatio;
+  const scoreOdd = 0.55 * regPO + 0.45 * (1 - top20EvenRatio);
+  const parityDiff = Math.abs(scoreEven - scoreOdd);
+
+  const paritySide = scoreEven >= scoreOdd ? 'EVEN' : 'ODD';
+  const parityConfidence = Math.min(92, Math.max(62, Math.round(64 + parityDiff * 110)));
+  const parityTieRate = Number(((tieParityAll / N) * 100).toFixed(1));
+  const parityTieAlert = (parityTieGap >= 4 && parityDiff <= 0.045) || parityTieGap >= 8;
+
+  const lastDraw = draws[N - 1];
+  const strongParitySurge =
+    (paritySide === 'EVEN' && top20Even >= 13 && e15 > o15) ||
+    (paritySide === 'ODD' && top20Even <= 7 && o15 > e15);
+
+  const parityPick =
+    paritySide === 'EVEN'
+      ? `CHẴN CHỦ ĐẠO (${strongParitySurge ? 'Mạnh Chẵn ≥13 & ' : ''}Chẵn 11–12)`
+      : `LẺ CHỦ ĐẠO (${strongParitySurge ? 'Mạnh Lẻ ≥13 & ' : ''}Lẻ 11–12)`;
+
+  const parityComboPick =
+    paritySide === 'EVEN'
+      ? 'Vé tối ưu: Chẵn 11–12 + Bọc Hòa (10–10) (ăn x2)'
+      : 'Vé tối ưu: Lẻ 11–12 + Bọc Hòa (10–10) (ăn x2)';
+
+  const parityTieStatus = parityTieAlert
+    ? `⚖️ BÁO ĐỘNG CẦU HÒA (10–10) CAO · Đã gan ${parityTieGap} kỳ (TB nổ ${parityTieRate}%)`
+    : `Cửa Hòa (10–10): Cách ${parityTieGap} kỳ · Tần suất ${parityTieRate}%`;
+
+  const parityReason =
+    paritySide === 'EVEN'
+      ? `Top 20 bóng nóng có ${top20Even}/20 số Chẵn; nhịp 60 kỳ Chẵn thắng ${e60}:${o60} (kỳ trước ${lastDraw.evenCount} Chẵn - ${lastDraw.oddCount} Lẻ).`
+      : `Top 20 bóng nóng có ${20 - top20Even}/20 số Lẻ; nhịp 60 kỳ Lẻ thắng ${o60}:${e60} (kỳ trước ${lastDraw.evenCount} Chẵn - ${lastDraw.oddCount} Lẻ).`;
+
+  // Size ensemble score (K=24 wBall=0.50 + W50 wRegime=0.50)
+  const regSB = b50 / (b50 + sm50 || 1);
+  const regSS = 1 - regSB;
+  const scoreBig = 0.50 * regSB + 0.50 * top24BigRatio;
+  const scoreSmall = 0.50 * regSS + 0.50 * (1 - top24BigRatio);
+  const sizeDiff = Math.abs(scoreBig - scoreSmall);
+
+  const sizeSide = scoreBig >= scoreSmall ? 'BIG' : 'SMALL';
+  const sizeConfidence = Math.min(92, Math.max(62, Math.round(64 + sizeDiff * 110)));
+  const sizeTieRate = Number(((tieSizeAll / N) * 100).toFixed(1));
+  const sizeTieAlert = (sizeTieGap >= 4 && sizeDiff <= 0.045) || sizeTieGap >= 8;
+
+  const strongSizeSurge =
+    (sizeSide === 'BIG' && top24Big >= 15 && b50 > sm50) ||
+    (sizeSide === 'SMALL' && top24Big <= 9 && sm50 > b50);
+
+  const sizePick =
+    sizeSide === 'BIG'
+      ? `LỚN CHỦ ĐẠO 41–80 (${strongSizeSurge ? 'Mạnh Lớn ≥13 & ' : ''}Lớn 11–12)`
+      : `NHỎ CHỦ ĐẠO 01–40 (${strongSizeSurge ? 'Mạnh Nhỏ ≥13 & ' : ''}Nhỏ 11–12)`;
+
+  const sizeComboPick =
+    sizeSide === 'BIG'
+      ? 'Cửa bọc an toàn: Lớn (≥11) + Bọc Hòa (10–10)'
+      : 'Cửa bọc an toàn: Nhỏ (≥11) + Bọc Hòa (10–10)';
+
+  const sizeTieStatus = sizeTieAlert
+    ? `⚖️ BÁO ĐỘNG HÒA LỚN NHỎ (10–10) CAO · Đã gan ${sizeTieGap} kỳ (TB ${sizeTieRate}%)`
+    : `Hòa Lớn Nhỏ (10–10): Cách ${sizeTieGap} kỳ · Tần suất ${sizeTieRate}%`;
+
+  const sizeReason =
+    sizeSide === 'BIG'
+      ? `Top 24 bóng nóng có ${top24Big}/24 số Lớn (41–80); nhịp 50 kỳ Lớn thắng ${b50}:${sm50} (kỳ trước ${lastDraw.bigCount} Lớn - ${lastDraw.smallCount} Nhỏ).`
+      : `Top 24 bóng nóng có ${24 - top24Big}/24 số Nhỏ (01–40); nhịp 50 kỳ Nhỏ thắng ${sm50}:${b50} (kỳ trước ${lastDraw.bigCount} Lớn - ${lastDraw.smallCount} Nhỏ).`;
 
   return {
+    paritySide,
     parityPick,
+    parityComboPick,
+    parityTieStatus,
+    parityTieAlert,
     parityConfidence,
     parityReason,
+    sizeSide,
     sizePick,
+    sizeComboPick,
+    sizeTieStatus,
+    sizeTieAlert,
     sizeConfidence,
     sizeReason
   };
@@ -592,6 +699,17 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
         top4AnyWinRate: 0,
         top4TotalPairsWon: 0,
         top4Rtp: 0,
+        parityExactWinCount: 0,
+        parityExactWinRate: 0,
+        parityCoverWinCount: 0,
+        parityCoverWinRate: 0,
+        parity2DoorWinCount: 0,
+        parity2DoorWinRate: 0,
+        parity2DoorRtp: 0,
+        sizeExactWinCount: 0,
+        sizeExactWinRate: 0,
+        sizeCoverWinCount: 0,
+        sizeCoverWinRate: 0,
         avgTop5HitRate: 0,
         theoretical: THEORETICAL_KENO,
         last100: null
@@ -672,6 +790,11 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
   let top4AnyWinCount = 0;
   let top4TotalPairsWon = 0;
   let top4PrizeTotal = 0;
+  let parityExactWinCount = 0;
+  let parityCoverWinCount = 0;
+  let parity2DoorWinCount = 0;
+  let sizeExactWinCount = 0;
+  let sizeCoverWinCount = 0;
 
   const backtestHistory = [];
 
@@ -807,6 +930,64 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
     top4TotalPairsWon += top4WinsThisDraw;
     top4PrizeTotal += top4PrizeThisDraw;
 
+    // Reconcile Parity (Chẵn/Lẻ/Hòa) & Size (Lớn/Nhỏ/Hòa)
+    const pBallScores = [];
+    const d20 = Math.min(20, sampleSizeUsed);
+    const d10 = Math.min(10, sampleSizeUsed);
+    for (let n = 1; n <= 80; n++) {
+      const sc = (countAll[n] / sampleSizeUsed) * 30 + (count20[n] / d20) * 35 + (count10[n] / d10) * 35;
+      pBallScores.push({ n, sc });
+    }
+    pBallScores.sort((a, b) => b.sc - a.sc);
+    const top20EvenRatio = pBallScores.slice(0, 20).filter((x) => x.n % 2 === 0).length / 20;
+    const top24BigRatio = pBallScores.slice(0, 24).filter((x) => x.n > 40).length / 24;
+
+    let e60 = 0, o60 = 0, e15 = 0, o15 = 0, b50 = 0, sm50 = 0;
+    const lookbackStart = Math.max(0, idx - 60);
+    for (let k = idx - 1; k >= lookbackStart; k--) {
+      const age = idx - 1 - k;
+      const ev = draws[k].evenCount;
+      const bg = draws[k].bigCount;
+      if (ev >= 11) {
+        if (age < 60) e60++;
+        if (age < 15) e15++;
+      } else if (ev <= 9) {
+        if (age < 60) o60++;
+        if (age < 15) o15++;
+      }
+      if (age < 50) {
+        if (bg >= 11) b50++;
+        else if (bg <= 9) sm50++;
+      }
+    }
+    const regPE = 0.70 * (e60 / (e60 + o60 || 1)) + 0.30 * (e15 / (e15 + o15 || 1));
+    const scoreEven = 0.55 * regPE + 0.45 * top20EvenRatio;
+    const scoreOdd = 0.55 * (1 - regPE) + 0.45 * (1 - top20EvenRatio);
+    const predParitySide = scoreEven >= scoreOdd ? 'EVEN' : 'ODD';
+
+    const regSB = b50 / (b50 + sm50 || 1);
+    const scoreBig = 0.50 * regSB + 0.50 * top24BigRatio;
+    const scoreSmall = 0.50 * (1 - regSB) + 0.50 * (1 - top24BigRatio);
+    const predSizeSide = scoreBig >= scoreSmall ? 'BIG' : 'SMALL';
+
+    const actualParityState = actualDraw.evenCount >= 11 ? 'EVEN' : actualDraw.evenCount === 10 ? 'TIE' : 'ODD';
+    const actualSizeState = actualDraw.bigCount >= 11 ? 'BIG' : actualDraw.bigCount === 10 ? 'TIE' : 'SMALL';
+
+    const parityExactWon = predParitySide === actualParityState;
+    const parityCoverWon = parityExactWon || actualParityState === 'TIE';
+    const parity2DoorWon =
+      (predParitySide === 'EVEN' && (actualDraw.evenCount === 10 || actualDraw.evenCount === 11 || actualDraw.evenCount === 12)) ||
+      (predParitySide === 'ODD' && (actualDraw.evenCount === 10 || actualDraw.evenCount === 9 || actualDraw.evenCount === 8));
+
+    const sizeExactWon = predSizeSide === actualSizeState;
+    const sizeCoverWon = sizeExactWon || actualSizeState === 'TIE';
+
+    if (parityExactWon) parityExactWinCount++;
+    if (parityCoverWon) parityCoverWinCount++;
+    if (parity2DoorWon) parity2DoorWinCount++;
+    if (sizeExactWon) sizeExactWinCount++;
+    if (sizeCoverWon) sizeCoverWinCount++;
+
     backtestHistory.push({
       drawId: actualDraw.drawId,
       time: actualDraw.time,
@@ -843,6 +1024,19 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
         hits: hitBac5,
         hitCount: hitBac5.length,
         prize: prizeBac5
+      },
+      paritySize: {
+        predParitySide,
+        actualParityState,
+        evenCount: actualDraw.evenCount,
+        parityExactWon,
+        parityCoverWon,
+        parity2DoorWon,
+        predSizeSide,
+        actualSizeState,
+        bigCount: actualDraw.bigCount,
+        sizeExactWon,
+        sizeCoverWon
       }
     });
 
@@ -893,6 +1087,17 @@ export function runAdaptiveBacktestAndLearn(draws, customMode = 'adaptive') {
       top4AnyWinRate: Number(((top4AnyWinCount / evalCount) * 100).toFixed(1)),
       top4TotalPairsWon,
       top4Rtp: Number(((top4PrizeTotal / top4TicketCost) * 100).toFixed(1)),
+      parityExactWinCount,
+      parityExactWinRate: Number(((parityExactWinCount / evalCount) * 100).toFixed(1)),
+      parityCoverWinCount,
+      parityCoverWinRate: Number(((parityCoverWinCount / evalCount) * 100).toFixed(1)),
+      parity2DoorWinCount,
+      parity2DoorWinRate: Number(((parity2DoorWinCount / evalCount) * 100).toFixed(1)),
+      parity2DoorRtp: Number((((parity2DoorWinCount * 20000) / (evalCount * 20000)) * 2 * 100).toFixed(1)),
+      sizeExactWinCount,
+      sizeExactWinRate: Number(((sizeExactWinCount / evalCount) * 100).toFixed(1)),
+      sizeCoverWinCount,
+      sizeCoverWinRate: Number(((sizeCoverWinCount / evalCount) * 100).toFixed(1)),
       avgTop5HitRate: Number(((totalTop5Hits / (evalCount * 5)) * 100).toFixed(1)),
       theoretical: THEORETICAL_KENO,
       last100: {
@@ -925,7 +1130,7 @@ export function analyzeAndPredictNextDraw(draws, customMode = 'adaptive') {
     lastSet,
     draws.length
   );
-  const parityAndSize = predictParityAndSize(draws, rankedNumbers);
+  const parityAndSize = predictParityAndSize(draws, rankedNumbers, subModels);
 
   const latestDraw = draws.length > 0 ? draws[draws.length - 1] : null;
   const nextDrawId = latestDraw ? String(latestDraw.drawNumber + 1) : '---';

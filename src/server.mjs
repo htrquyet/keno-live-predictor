@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'bingo18_history.json');
+const DATA_FILE = path.join(DATA_DIR, 'keno_history.json');
 const MAX_HISTORY_DRAWS = 2500;
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3080;
@@ -46,15 +46,14 @@ function loadHistoryFromDisk() {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) {
         for (const item of arr) {
-          if (item && item.drawNumber && Array.isArray(item.numbers) && item.numbers.length === 3) {
-            const norm = normalizeDraw(item.drawId || item.drawNumber, item.date, item.numbers, item.source || 'disk', item.time);
-            drawMap.set(norm.drawNumber, norm);
+          if (item && item.drawNumber && Array.isArray(item.numbers) && item.numbers.length === 20) {
+            drawMap.set(item.drawNumber, item);
           }
         }
       }
-      console.log(`[Server] Loaded ${drawMap.size} historical Bingo18 draws from disk.`);
+      console.log(`[Server] Loaded ${drawMap.size} historical Keno draws from disk.`);
     } catch (err) {
-      console.warn('[Server] Could not parse bingo18_history.json:', err.message);
+      console.warn('[Server] Could not parse keno_history.json:', err.message);
     }
   }
 }
@@ -86,7 +85,12 @@ function getSortedDraws() {
 function getCurrentSchedule() {
   const draws = getSortedDraws();
   const latestDraw = draws.length > 0 ? draws[draws.length - 1] : null;
-  return getNextDrawSchedule(latestDraw);
+  const sch = getNextDrawSchedule(latestDraw);
+  return {
+    ...sch,
+    nextDrawId: sch.expectedDrawId,
+    targetTimestampMs: Date.now() + (sch.secondsUntilNextSchedule || 0) * 1000
+  };
 }
 
 function recomputeAnalysis() {
@@ -101,8 +105,7 @@ function buildStatePayload(mode = currentMode) {
     mode === currentMode && cachedAnalysis
       ? cachedAnalysis
       : analyzeAndPredictNextDraw(draws, mode);
-  const latestDraw = draws.length > 0 ? draws[draws.length - 1] : null;
-  const schedule = getNextDrawSchedule(latestDraw);
+  const schedule = getCurrentSchedule();
 
   return {
     serverTime: new Date().toISOString(),
@@ -110,8 +113,14 @@ function buildStatePayload(mode = currentMode) {
     lastPollStatus,
     isPolling,
     schedule,
-    recentDraws: [...draws].reverse().slice(0, 50),
-    syncDraws: draws.slice(-1000),
+    recentDraws: [...draws].reverse().slice(0, 40),
+    syncDraws: draws.map((d) => ({
+      drawId: d.drawId,
+      drawNumber: d.drawNumber,
+      time: d.time,
+      date: d.date,
+      numbers: d.numbers
+    })),
     analysis
   };
 }
@@ -128,9 +137,9 @@ function broadcastSse(event, data) {
 }
 
 /**
- * Poll live sources and merge any new Bingo18 draws into the dataset
+ * Poll live Keno sources and merge any new draws into the dataset
  */
-async function pollNow(isInitial = false, maxBatches = 15) {
+async function pollNow(isInitial = false, pagesToFetch = 8) {
   if (activePollPromise) {
     return activePollPromise;
   }
@@ -138,8 +147,8 @@ async function pollNow(isInitial = false, maxBatches = 15) {
   activePollPromise = (async () => {
     isPolling = true;
     lastPollStatus = isInitial
-      ? 'Đang đồng bộ lịch sử Bingo18...'
-      : 'Đang quét kết quả Bingo18 kỳ mới...';
+      ? `Đang đồng bộ lịch sử Keno (${pagesToFetch} trang)...`
+      : 'Đang quét kỳ Keno mới...';
     broadcastSse('poll_status', { isPolling, lastPollStatus, schedule: getCurrentSchedule() });
 
     let added = 0;
@@ -147,6 +156,7 @@ async function pollNow(isInitial = false, maxBatches = 15) {
 
     try {
       const prevMaxDraw = drawMap.size > 0 ? Math.max(...drawMap.keys()) : 0;
+      const prevMaxDrawObj = prevMaxDraw > 0 ? drawMap.get(prevMaxDraw) : null;
       const knownIds = new Set(drawMap.keys());
 
       const mergeAndFlushBatch = (batch) => {
@@ -173,9 +183,10 @@ async function pollNow(isInitial = false, maxBatches = 15) {
       };
 
       const fetched = isInitial
-        ? await fetchInitialHistory(maxBatches, {
+        ? await fetchInitialHistory(pagesToFetch, {
             knownIds,
             maxKnownId: prevMaxDraw,
+            latestStoredDateSlash: prevMaxDrawObj ? prevMaxDrawObj.date : null,
             onProgress: mergeAndFlushBatch
           })
         : await fetchLatestDraws();
@@ -201,7 +212,11 @@ async function pollNow(isInitial = false, maxBatches = 15) {
         if (gapStillExists) {
           console.log(`[Poll] Auto-healing gap #${prevMaxDraw + 1}..#${newestDraw.drawNumber - 1}`);
           try {
-            const gapDraws = await fetchMissingGapDraws(prevMaxDraw + 1, newestDraw.drawNumber - 1);
+            const gapDraws = await fetchMissingGapDraws(
+              prevMaxDraw + 1,
+              newestDraw.drawNumber - 1,
+              prevMaxDrawObj ? prevMaxDrawObj.date : null
+            );
             for (const gd of gapDraws) {
               if (!drawMap.has(gd.drawNumber)) {
                 drawMap.set(gd.drawNumber, gd);
@@ -252,7 +267,7 @@ async function pollNow(isInitial = false, maxBatches = 15) {
 /**
  * Load older historical draws strictly preceding the oldest stored draw
  */
-async function expandHistoryNow(batches = 15) {
+async function expandHistoryNow(days = 2, pages = 8) {
   if (activePollPromise) {
     try {
       await activePollPromise;
@@ -267,7 +282,7 @@ async function expandHistoryNow(batches = 15) {
 
   activePollPromise = (async () => {
     isPolling = true;
-    lastPollStatus = `Đang nạp thêm ${batches * 10} kỳ Bingo18 cũ hơn...`;
+    lastPollStatus = `Đang nạp thêm ${days} ngày lịch sử Keno cũ hơn...`;
     broadcastSse('poll_status', { isPolling, lastPollStatus, schedule: getCurrentSchedule() });
 
     let added = 0;
@@ -276,7 +291,7 @@ async function expandHistoryNow(batches = 15) {
     try {
       const sorted = getSortedDraws();
       const oldestDraw = sorted.length > 0 ? sorted[0] : null;
-      const fetched = await fetchOlderHistoryDraws(oldestDraw, batches, drawMap.size);
+      const fetched = await fetchOlderHistoryDraws(oldestDraw, days, pages);
 
       const beforeIds = new Set(drawMap.keys());
       for (const d of fetched) {
@@ -322,7 +337,7 @@ async function expandHistoryNow(batches = 15) {
   return activePollPromise;
 }
 
-// Smart 6-Minute Scheduler Loop
+// Smart 8-Minute Keno Scheduler Loop
 let lastQuickPollMs = 0;
 let lastRegularPollMs = 0;
 
@@ -335,7 +350,7 @@ function startSmartPollingLoop() {
       schedule.awaitingNewResult ||
       (schedule.isOperatingHours &&
         (schedule.secondsUntilNextSchedule <= 5 ||
-          (schedule.secondsUntilNextSchedule >= 340 && schedule.secondsUntilNextSchedule <= 360)));
+          (schedule.secondsUntilNextSchedule >= 455 && schedule.secondsUntilNextSchedule <= 480)));
 
     if (isHotWindow) {
       if (nowMs - lastQuickPollMs >= 4000) {
@@ -344,7 +359,7 @@ function startSmartPollingLoop() {
         pollNow(false);
       }
     } else {
-      const intervalMs = schedule.isOperatingHours ? 18000 : 120000;
+      const intervalMs = schedule.isOperatingHours ? 20000 : 120000;
       if (nowMs - lastRegularPollMs >= intervalMs) {
         lastRegularPollMs = nowMs;
         pollNow(false);
@@ -410,7 +425,7 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) {
       body += chunk;
-      if (body.length > 512000) break;
+      if (body.length > 2 * 1024 * 1024) break;
     }
     let added = 0;
     try {
@@ -419,12 +434,13 @@ const server = http.createServer(async (req, res) => {
       for (const item of clientDraws) {
         if (
           item &&
-          (item.drawId || item.drawNumber) &&
+          item.drawId &&
+          item.time &&
           item.date &&
           Array.isArray(item.numbers) &&
-          item.numbers.length === 3
+          item.numbers.length === 20
         ) {
-          const norm = normalizeDraw(item.drawId || item.drawNumber, item.date, item.numbers, item.source || 'client-cache', item.time);
+          const norm = normalizeDraw(item.drawId, item.time, item.date, item.numbers, item.source || 'client-cache');
           if (norm.drawNumber > 0 && !drawMap.has(norm.drawNumber)) {
             drawMap.set(norm.drawNumber, norm);
             added++;
@@ -454,9 +470,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/expand-history' && req.method === 'POST') {
-    const rawBatches = parseInt(urlObj.searchParams.get('batches') || '15', 10);
-    const batches = Math.min(30, Math.max(5, Number.isNaN(rawBatches) ? 15 : rawBatches));
-    const result = await expandHistoryNow(batches);
+    const rawDays = parseInt(urlObj.searchParams.get('days') || '2', 10);
+    const rawPages = parseInt(urlObj.searchParams.get('pages') || '8', 10);
+    const days = Math.min(5, Math.max(1, Number.isNaN(rawDays) ? 2 : rawDays));
+    const pages = Math.min(10, Math.max(5, Number.isNaN(rawPages) ? 8 : rawPages));
+    const result = await expandHistoryNow(days, pages);
     const payload = buildStatePayload(currentMode);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ...payload, refreshResult: result }));
@@ -486,7 +504,7 @@ recomputeAnalysis();
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n======================================================`);
-  console.log(`🎲 VIETLOTT BINGO18 LIVE ANALYTICS & PREDICTOR RUNNING`);
+  console.log(`🎯 VIETLOTT KENO BẬC 2 — SINGLE PAIR PREDICTOR RUNNING`);
   console.log(`🌐 Mở trình duyệt tại: http://localhost:${PORT}`);
   console.log(`======================================================\n`);
   pollNow(true);

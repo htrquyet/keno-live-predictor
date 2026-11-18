@@ -78,9 +78,9 @@
 
           <div class="mode-selector">
             <select id="modeSelect" aria-label="Chọn thuật toán">
-              <option value="hybrid_markov_cooc">🎯 Markov + Cooc (B3: 18.29% · RTP 107.1%)</option>
-              <option value="hybrid_markov_base">⚖️ Markov Cân Bằng (B3: 18.14% · RTP 106.9%)</option>
-              <option value="hybrid_strict_gap13">🛡️ Cắt Gan ≤13k (B3: 18.14% · ≥1/3: 60%)</option>
+              <option value="hybrid_markov_cooc">🎯 Markov + Cooc (An Toàn 60.2% · RTP 154%)</option>
+              <option value="triad_synergy_core">⚡ Nén Thuần 3 Số (Cặp 2/2 8.29% · RTP 151%)</option>
+              <option value="triad_jackpot_33">🔥 Săn 3/3 x40 (17 lần 3/3 · RTP 172%)</option>
             </select>
           </div>
         </div>
@@ -89,15 +89,15 @@
         <div class="mode-pills" role="group" aria-label="Chọn nhanh thuật toán">
           <button type="button" class="mode-pill active" data-mode="hybrid_markov_cooc">
             <span>🎯 Markov+Cooc</span>
-            <small>18.29% · RTP 107%</small>
+            <small>An toàn 60.2%</small>
           </button>
-          <button type="button" class="mode-pill" data-mode="hybrid_markov_base">
-            <span>⚖️ Cân Bằng</span>
-            <small>18.14% · RTP 107%</small>
+          <button type="button" class="mode-pill" data-mode="triad_synergy_core">
+            <span>⚡ Nén 3 Số</span>
+            <small>Cặp 2/2: 8.29%</small>
           </button>
-          <button type="button" class="mode-pill" data-mode="hybrid_strict_gap13">
-            <span>🛡️ Gan ≤13k</span>
-            <small>18.14% · 101.4%</small>
+          <button type="button" class="mode-pill" data-mode="triad_jackpot_33">
+            <span>🔥 Săn 3/3 x40</span>
+            <small>RTP 100k: 172%</small>
           </button>
         </div>
 
@@ -114,6 +114,32 @@
             <div class="pair-algo-tag" id="predAlgoDesc">Đang tải thông tin...</div>
             <div class="pair-reason-box" id="pairSelectionReason">Đang phân tích Markov & chuỗi nén...</div>
           </div>
+        </div>
+
+        <!-- 100K SMART PLAYER BANKROLL PANEL -->
+        <div class="player-100k-panel" id="player100kPanel">
+          <div class="player-header-row">
+            <span class="player-title">💼 CHẾ ĐỘ NGƯỜI CHƠI THỰC CHIẾN · VỐN 100.000Đ</span>
+            <span class="player-action-badge" id="playerNextActionBadge">Đang tính bước...</span>
+          </div>
+
+          <div class="player-controls-row">
+            <button type="button" class="btn btn-compact btn-start-session" id="startMySessionBtn">
+              ▶️ Bắt Đầu Ví 100k Từ Kỳ Tới
+            </button>
+            <button type="button" class="btn btn-compact btn-demo-session" id="demoMySession5Btn">
+              ⚡ Chạy Thử Từ 5 Kỳ Trước
+            </button>
+            <button type="button" class="btn btn-compact btn-stop-session" id="stopMySessionBtn" style="display: none;">
+              ⏹️ Thoát Phiên Cá Nhân
+            </button>
+          </div>
+
+          <div class="my-session-status-box" id="mySessionStatusBox" style="display: none;"></div>
+          <p class="player-instruction" id="playerInstructionText">Đang mô phỏng chiến thuật quản lý vốn 100.000đ...</p>
+          <div class="player-steps-strip" id="playerStepsStrip"></div>
+          <div class="my-session-history-list" id="mySessionHistoryList" style="display: none;"></div>
+          <div class="player-summary-grid" id="playerSummaryRow"></div>
         </div>
 
         <!-- WHEELING BACKUP NUMBERS (+C & +D) -->
@@ -216,8 +242,8 @@
                   <th>Kỳ (Giờ)</th>
                   <th>Bộ 3 (Cặp 2/2)</th>
                   <th>Kết Quả B3</th>
-                  <th>Cặp 2/2</th>
-                  <th>Thưởng B3</th>
+                  <th>Lệnh Ví 100k</th>
+                  <th>Ví Sau Kỳ</th>
                 </tr>
               </thead>
               <tbody id="backtestTableBody"></tbody>
@@ -300,9 +326,9 @@
                   <th>Thuật Toán</th>
                   <th>Trúng B3</th>
                   <th>Nổ 3/3</th>
-                  <th>RTP B3</th>
                   <th>Cặp 2/2</th>
-                  <th>MaxGan B3</th>
+                  <th>An Toàn 100k</th>
+                  <th>RTP Ví 100k</th>
                 </tr>
               </thead>
               <tbody id="strategyCompTableBody"></tbody>

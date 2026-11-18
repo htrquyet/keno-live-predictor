@@ -1,6 +1,38 @@
 /* Vietlott Keno Bậc 2 — Chuyên Gia Dự Đoán 1 Cặp 2 Số [A, B] */
 
 const STORAGE_CACHE_KEY = 'keno_pair_cached_draws_v3';
+const MY_SESSION_STORAGE_KEY = 'keno_my_100k_session_v1';
+
+const MY_SESSION_STEPS = [
+  { step: 1, type: 'B3', stake: 10000, shortLabel: 'B1: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 lãi +10k' },
+  { step: 2, type: 'B3', stake: 10000, shortLabel: 'B2: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 Hòa 100k' },
+  { step: 3, type: 'B3', stake: 20000, shortLabel: 'B3: 20k B3', desc: 'Vé Bậc 3 (20k) — Trúng 2/3 Hòa 100k' },
+  { step: 4, type: 'B3', stake: 40000, shortLabel: 'B4: 40k B3', desc: 'Vé Bậc 3 (40k) — Trúng 2/3 Hòa 100k' },
+  { step: 5, type: 'B2', stake: 10000, shortLabel: 'B5: 10k B2', desc: 'Phao Bậc 2 (10k) — Nổ 2/2 về lại 100k (Giữ 10k)' }
+];
+
+function loadMySessionState() {
+  try {
+    const raw = localStorage.getItem(MY_SESSION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.active && Number(parsed.startDrawNumber) > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // Ignore storage error
+  }
+  return { active: false, startDrawNumber: 0, startedAt: null };
+}
+
+function saveMySessionState(st) {
+  try {
+    localStorage.setItem(MY_SESSION_STORAGE_KEY, JSON.stringify(st));
+  } catch {
+    // Ignore storage error
+  }
+}
 
 let appState = {
   schedule: null,
@@ -10,7 +42,8 @@ let appState = {
   lastSeenDrawId: null,
   soundEnabled: true,
   lastZeroTriggerMs: 0,
-  customInitialized: false
+  customInitialized: false,
+  mySession: loadMySessionState()
 };
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -190,12 +223,268 @@ function renderPredictionShowcase(analysis) {
     </div>
   `;
 
+  renderPlayer100kPanel(analysis);
+
   if (!appState.customInitialized && Array.isArray(pred.trio) && pred.trio.length === 3) {
     appState.customInitialized = true;
     document.getElementById('customNumA').value = pred.trio[0];
     document.getElementById('customNumB').value = pred.trio[1];
     document.getElementById('customNumC').value = pred.trio[2];
   }
+}
+
+function computeMyPersonalSession(analysis, startDrawNumber) {
+  const drawsAsc = (analysis.backtestHistory || [])
+    .filter((r) => r.drawNumber >= startDrawNumber)
+    .sort((a, b) => a.drawNumber - b.drawNumber);
+
+  let bank = 100000;
+  let vaultProfit = 0;
+  let stepIdx = 0;
+  let consecMisses = 0;
+  let sessionCount = 1;
+  let wins = 0;
+  let evens = 0;
+  let stopLosses = 0;
+  const log = [];
+
+  for (const r of drawsAsc) {
+    if (consecMisses === 2) {
+      log.push({
+        drawId: r.drawId,
+        time: r.time,
+        type: 'SKIP',
+        label: '⏸️ Nghỉ 0đ (Né nhịp)',
+        stake: 0,
+        prize: 0,
+        bankAfter: bank,
+        outcome: 'SKIP',
+        picks: (r.trioLabels || r.predictedLabels).join('-')
+      });
+      consecMisses = 0;
+      continue;
+    }
+
+    const stepCfg = MY_SESSION_STEPS[stepIdx];
+    const mult = stepCfg.stake / 10000;
+    bank -= stepCfg.stake;
+
+    const prize =
+      stepCfg.type === 'B3'
+        ? (r.bac3Prize || 0) * mult
+        : (r.wonBac2 ? 90000 : 0) * mult;
+    bank += prize;
+
+    let outcome = 'IN_PROGRESS';
+    const bankSnapshot = bank;
+    if (bank >= 100000) {
+      const net = bank - 100000;
+      vaultProfit += net;
+      if (net > 0) {
+        wins++;
+        outcome = 'WIN_RESET';
+      } else {
+        evens++;
+        outcome = 'EVEN_RESET';
+      }
+      log.push({
+        drawId: r.drawId,
+        time: r.time,
+        type: stepCfg.type,
+        label: stepCfg.shortLabel,
+        stake: stepCfg.stake,
+        prize,
+        bankAfter: bankSnapshot,
+        outcome,
+        picks: (stepCfg.type === 'B3' ? r.trioLabels : r.predictedLabels).join('-')
+      });
+      bank = 100000;
+      stepIdx = 0;
+      consecMisses = 0;
+      sessionCount++;
+    } else if (stepIdx === MY_SESSION_STEPS.length - 1) {
+      stopLosses++;
+      vaultProfit += bank - 100000;
+      outcome = 'STOP_LOSS_KEEP_10K';
+      log.push({
+        drawId: r.drawId,
+        time: r.time,
+        type: stepCfg.type,
+        label: stepCfg.shortLabel,
+        stake: stepCfg.stake,
+        prize,
+        bankAfter: bankSnapshot,
+        outcome,
+        picks: r.predictedLabels.join('-')
+      });
+      bank = 100000;
+      stepIdx = 0;
+      consecMisses = 0;
+      sessionCount++;
+    } else {
+      log.push({
+        drawId: r.drawId,
+        time: r.time,
+        type: stepCfg.type,
+        label: stepCfg.shortLabel,
+        stake: stepCfg.stake,
+        prize,
+        bankAfter: bankSnapshot,
+        outcome,
+        picks: (stepCfg.type === 'B3' ? r.trioLabels : r.predictedLabels).join('-')
+      });
+      stepIdx++;
+      consecMisses++;
+    }
+  }
+
+  const nextId = analysis.nextDrawId || '------';
+  const trioStr = analysis.prediction.trioLabels.join(' - ');
+  const pairStr = analysis.prediction.pairLabels.join(' - ');
+  const isSkip = consecMisses === 2;
+  const curStep = MY_SESSION_STEPS[stepIdx];
+
+  let nextInstruction = '';
+  if (isSkip) {
+    nextInstruction = `⏸️ BƯỚC TIẾP THEO (Kỳ #${nextId}): TẠM NGHỈ QUAN SÁT 0Đ (vừa trượt 2 kỳ liên tiếp trong phiên). Giữ nguyên ví ${formatVnd(bank)}, kỳ kế tiếp vào ${curStep.shortLabel}.`;
+  } else if (curStep.type === 'B3') {
+    const mult = curStep.stake / 10000;
+    const r2 = 20000 * mult;
+    const r3 = 400000 * mult;
+    const bankAfterWin2 = bank - curStep.stake + r2;
+    const resWord = bankAfterWin2 > 100000 ? `LÃI +${formatVnd(bankAfterWin2 - 100000)}` : `HÒA ĐÚNG 100.000đ`;
+    nextInstruction = `👉 BƯỚC ${curStep.step}/5 CỦA BẠN (Kỳ #${nextId}): Mua vé BẬC 3 bộ [${trioStr}] giá ${formatVnd(curStep.stake)} (Ví ${formatVnd(bank)} → còn ${formatVnd(bank - curStep.stake)}). Trúng 2/3 thu ${formatVnd(r2)} (${resWord}) · Trúng 3/3 thu ${formatVnd(r3)}!`;
+  } else {
+    nextInstruction = `🛡️ BƯỚC 5/5 PHAO CỨU SINH (Kỳ #${nextId}): Mua vé BẬC 2 Cặp [${pairStr}] giá 10.000đ (luôn giữ 10.000đ dự phòng). Nổ 2/2 thu 90.000đ đưa ví về đúng 100.000đ HÒA VỐN!`;
+  }
+
+  return {
+    startDrawNumber,
+    evaluatedCount: drawsAsc.length,
+    sessionCount,
+    bank,
+    vaultProfit,
+    stepIdx,
+    stepNumber: curStep.step,
+    stake: curStep.stake,
+    targetMode: curStep.type,
+    isSkip,
+    wins,
+    evens,
+    stopLosses,
+    nextInstruction,
+    stepsPlan: MY_SESSION_STEPS.map((s, idx) => ({
+      ...s,
+      status: idx < stepIdx ? 'done_miss' : idx === stepIdx ? (isSkip ? 'waiting_skip' : 'current') : 'upcoming'
+    })),
+    log: log.reverse()
+  };
+}
+
+function renderPlayer100kPanel(analysis) {
+  const p100k = analysis?.player100k;
+  if (!p100k || !p100k.nextAction || !p100k.summary) return;
+
+  const mySess = appState.mySession;
+  const startBtn = document.getElementById('startMySessionBtn');
+  const stopBtn = document.getElementById('stopMySessionBtn');
+  const statusBox = document.getElementById('mySessionStatusBox');
+  const historyListEl = document.getElementById('mySessionHistoryList');
+  const badgeEl = document.getElementById('playerNextActionBadge');
+  const instrEl = document.getElementById('playerInstructionText');
+  const stepsStripEl = document.getElementById('playerStepsStrip');
+
+  let activeStepsPlan = p100k.nextAction.stepsPlan || [];
+
+  if (mySess.active && mySess.startDrawNumber > 0) {
+    const mine = computeMyPersonalSession(analysis, mySess.startDrawNumber);
+    startBtn.textContent = '🔄 Đặt Lại Ví 100k (Về B1)';
+    stopBtn.style.display = 'inline-flex';
+    statusBox.style.display = 'flex';
+
+    const vStr = (mine.vaultProfit >= 0 ? '+' : '') + formatVnd(mine.vaultProfit);
+    statusBox.innerHTML = `
+      <span>🟢 <strong>PHIÊN CỦA BẠN (Từ kỳ #${mine.startDrawNumber})</strong> · Đã qua ${mine.evaluatedCount} kỳ</span>
+      <span>Ví hiện tại: <strong class="text-gold">${formatVnd(mine.bank)}</strong> · Lãi đã chốt: <strong class="${mine.vaultProfit >= 0 ? 'text-green' : 'text-red'}">${vStr}</strong></span>
+    `;
+
+    badgeEl.className = 'player-action-badge' + (mine.isSkip ? ' skip' : '');
+    badgeEl.textContent = mine.isSkip
+      ? `⏸️ Tạm nghỉ 0đ · Ví ${formatVnd(mine.bank)}`
+      : `Bạn đang Bước ${mine.stepNumber}/5: ${formatVnd(mine.stake)} (${mine.targetMode === 'B3' ? 'Bậc 3' : 'Bậc 2'})`;
+    instrEl.textContent = mine.nextInstruction;
+    activeStepsPlan = mine.stepsPlan;
+
+    historyListEl.style.display = 'flex';
+    historyListEl.innerHTML =
+      mine.log.length > 0
+        ? mine.log
+            .map((item) => {
+              const cls = item.prize > 0 ? 'win' : item.type === 'SKIP' ? 'skip' : '';
+              const resBadge =
+                item.outcome === 'WIN_RESET'
+                  ? `<strong class="text-gold">+${formatVnd(item.prize)} → Lãi Reset!</strong>`
+                  : item.outcome === 'EVEN_RESET'
+                  ? `<strong class="text-green">+${formatVnd(item.prize)} → Hòa Reset!</strong>`
+                  : item.outcome === 'STOP_LOSS_KEEP_10K'
+                  ? `<span class="text-red">Giữ 10k · Reset</span>`
+                  : item.type === 'SKIP'
+                  ? `<span>Ngồi xem (0đ)</span>`
+                  : `<span style="color:var(--text-muted)">Trượt (-${formatVnd(item.stake)})</span>`;
+              return `
+                <div class="my-session-log-item ${cls}">
+                  <span>#${item.drawId} (${item.time}) · <strong>${item.label}</strong> [${item.picks}]</span>
+                  <span>${resBadge} · Ví: <strong>${formatVnd(item.bankAfter)}</strong></span>
+                </div>
+              `;
+            })
+            .join('')
+        : `<div class="my-session-log-item"><span>Chờ kỳ #${mine.startDrawNumber} mở thưởng — Hiện đang sẵn sàng ở <strong>Bước 1/5 (10.000đ Bậc 3)</strong> với Ví <strong>100.000đ</strong>!</span></div>`;
+  } else {
+    startBtn.textContent = '▶️ Bắt Đầu Ví 100k Từ Kỳ Tới';
+    stopBtn.style.display = 'none';
+    statusBox.style.display = 'none';
+    historyListEl.style.display = 'none';
+
+    const na = p100k.nextAction;
+    badgeEl.className = 'player-action-badge' + (na.isCooldownSkip ? ' skip' : '');
+    badgeEl.textContent = na.isCooldownSkip
+      ? `⏸️ Tạm nghỉ 0đ · Ví còn ${formatVnd(na.currentBank)}`
+      : `Bước ${na.stepNumber}/5: ${formatVnd(na.recommendedStake)} (${na.targetMode === 'B3' ? 'Bậc 3' : 'Bậc 2'}) · Ví ${formatVnd(na.currentBank)}`;
+    instrEl.textContent = na.ticketInstruction;
+  }
+
+  stepsStripEl.innerHTML = activeStepsPlan
+    .map(
+      (st) => `
+      <div class="pstep-chip ${st.status}" title="${st.desc}">
+        <strong>${st.shortLabel}</strong>
+        <span>${st.status === 'current' ? '👉 Đang vào' : st.status === 'waiting_skip' ? '⏸️ Chờ' : st.status === 'done_miss' ? 'Đã qua' : 'Dự phòng'}</span>
+      </div>
+    `
+    )
+    .join('');
+
+  const ps = p100k.summary;
+  const pNetStr = (ps.cumulativeNetProfit >= 0 ? '+' : '') + formatVnd(ps.cumulativeNetProfit);
+  document.getElementById('playerSummaryRow').innerHTML = `
+    <div class="psummary-mini">
+      <span>Phiên Hòa/Lãi (700k mẫu)</span>
+      <strong class="text-green">${ps.safeRate}% (${ps.safeSessions}/${ps.completedSessions})</strong>
+    </div>
+    <div class="psummary-mini">
+      <span>Tỷ Lệ Cháy Túi (0đ)</span>
+      <strong class="text-cyan">0.0% (Giữ 10k)</strong>
+    </div>
+    <div class="psummary-mini">
+      <span>RTP Thực Chiến 100k</span>
+      <strong class="text-gold">${ps.playerRtp}%</strong>
+    </div>
+    <div class="psummary-mini">
+      <span>Tổng Lãi Vốn 100k</span>
+      <strong class="${ps.cumulativeNetProfit >= 0 ? 'text-green' : 'text-red'}">${pNetStr}</strong>
+    </div>
+  `;
 }
 
 /* ==========================================================================
@@ -403,27 +692,35 @@ function renderAllTables(analysis) {
         b3Html = `<span style="color:var(--text-secondary)">1/3 (${matchedStr})</span>`;
       }
 
-      const b2Html = r.wonBac2
-        ? `<span class="text-gold"><strong>✅ [${r.predictedLabels.join('-')}]</strong></span>`
-        : `<span style="color:var(--text-muted)">[${r.predictedLabels.join('-')}] (${r.hitCount}/2)</span>`;
+      const pl = r.player || {};
+      let plOutcomeHtml = `<span style="color:var(--text-secondary)">${formatVnd(pl.bankAfter ?? 100000)}</span>`;
+      if (pl.outcome === 'WIN_RESET') {
+        plOutcomeHtml = `<strong class="text-gold">${formatVnd(pl.bankAfter)} (Lãi Reset)</strong>`;
+      } else if (pl.outcome === 'EVEN_RESET') {
+        plOutcomeHtml = `<strong class="text-green">${formatVnd(pl.bankAfter)} (Hòa Reset)</strong>`;
+      } else if (pl.outcome === 'STOP_LOSS_KEEP_10K') {
+        plOutcomeHtml = `<span class="text-red">10.000đ (Cắt lỗ)</span>`;
+      } else if (pl.outcome === 'SKIP') {
+        plOutcomeHtml = `<span style="color:var(--text-muted)">${formatVnd(pl.bankAfter)} (Quan sát)</span>`;
+      }
 
-      const prizeHtml = r.bac3Prize > 0
-        ? `<strong class="${r.trioHitCount === 3 ? 'text-gold' : 'text-green'}">+${formatVnd(r.bac3Prize)}</strong>`
-        : `<span style="color:var(--text-muted)">0đ</span>`;
+      const plActionHtml = pl.stake > 0
+        ? `<span style="color:var(--text-main)">${pl.actionLabel}</span>${pl.prize > 0 ? ` <strong class="text-green">+${formatVnd(pl.prize)}</strong>` : ''}`
+        : `<span style="color:var(--text-muted)">${pl.actionLabel || '⏸️ Nghỉ 0đ'}</span>`;
 
       return `
-        <tr class="${r.wonBac3 ? 'row-highlight' : ''}">
+        <tr class="${r.wonBac3 || pl.prize > 0 ? 'row-highlight' : ''}">
           <td style="font-family:var(--font-mono);">#${r.drawId} <small style="color:var(--text-muted)">(${r.time})</small></td>
-          <td><span class="pair-chip">[${trioArr.join(' - ')}]</span></td>
+          <td><span class="pair-chip">[${trioArr.join('-')}]</span></td>
           <td style="font-family:var(--font-mono);">${b3Html}</td>
-          <td style="font-family:var(--font-mono);">${b2Html}</td>
-          <td style="font-family:var(--font-mono);">${prizeHtml}</td>
+          <td style="font-family:var(--font-mono); font-size:0.71rem;">${plActionHtml}</td>
+          <td style="font-family:var(--font-mono); font-size:0.71rem;">${plOutcomeHtml}</td>
         </tr>
       `;
     })
     .join('');
 
-  // 3. Strategy Comparison Table (Bac 3 + Bac 2)
+  // 3. Strategy Comparison Table (Bac 3 + Bac 2 + 100k Player)
   document.getElementById('strategyCompTableBody').innerHTML = (analysis.strategyComparison || [])
     .map(
       (s) => `
@@ -434,10 +731,10 @@ function renderAllTables(analysis) {
         <td style="font-family:var(--font-mono);" class="${s.bac3WinRate > 15.73 ? 'text-green' : ''}">
           <strong>${s.bac3WinRate}%</strong> <small>(${s.bac3WinCount})</small>
         </td>
-        <td style="font-family:var(--font-mono);">${s.bac3Hit3Count} lần (${s.bac3Hit3Rate}%)</td>
-        <td style="font-family:var(--font-mono);" class="${s.bac3Rtp >= 100 ? 'text-gold' : ''}"><strong>${s.bac3Rtp}%</strong></td>
-        <td style="font-family:var(--font-mono);">${s.hit2Rate}% (${s.bac2Rtp}%)</td>
-        <td style="font-family:var(--font-mono);">${s.bac3MaxGap}k</td>
+        <td style="font-family:var(--font-mono);">${s.bac3Hit3Count} (${s.bac3Hit3Rate}%)</td>
+        <td style="font-family:var(--font-mono);">${s.hit2Rate}%</td>
+        <td style="font-family:var(--font-mono);" class="text-green"><strong>${s.player100k?.safeRate ?? '--'}%</strong></td>
+        <td style="font-family:var(--font-mono);" class="text-gold"><strong>${s.player100k?.playerRtp ?? '--'}%</strong></td>
       </tr>
     `
     )
@@ -648,6 +945,34 @@ function initControls() {
       expandBtn.textContent = origText;
       expandBtn.disabled = false;
     }
+  });
+
+  document.getElementById('startMySessionBtn').addEventListener('click', () => {
+    const nextNum = parseInt(appState.analysis?.nextDrawId, 10) || (appState.analysis?.latestDraw?.drawNumber + 1) || 1;
+    appState.mySession = {
+      active: true,
+      startDrawNumber: nextNum,
+      startedAt: new Date().toISOString()
+    };
+    saveMySessionState(appState.mySession);
+    renderPlayer100kPanel(appState.analysis);
+  });
+
+  document.getElementById('demoMySession5Btn').addEventListener('click', () => {
+    const latestNum = appState.analysis?.latestDraw?.drawNumber || 303151;
+    appState.mySession = {
+      active: true,
+      startDrawNumber: Math.max(1, latestNum - 4),
+      startedAt: new Date().toISOString()
+    };
+    saveMySessionState(appState.mySession);
+    renderPlayer100kPanel(appState.analysis);
+  });
+
+  document.getElementById('stopMySessionBtn').addEventListener('click', () => {
+    appState.mySession = { active: false, startDrawNumber: 0, startedAt: null };
+    saveMySessionState(appState.mySession);
+    renderPlayer100kPanel(appState.analysis);
   });
 
   document.getElementById('inspectPairBtn').addEventListener('click', () => {

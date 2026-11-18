@@ -76,14 +76,14 @@ function renderLatestDraw(analysis) {
   document.getElementById('sampleCountBadge').textContent = `Mẫu đối soát: ${analysis.totalHistoricalDraws} kỳ`;
 
   const btLatest = analysis.backtestHistory && analysis.backtestHistory[0];
-  const predictedForLatest =
-    btLatest && btLatest.drawId === latest.drawId ? btLatest.predictedPair : [];
-  const predSet = new Set(predictedForLatest);
+  const trioForLatest =
+    btLatest && btLatest.drawId === latest.drawId ? btLatest.trio || btLatest.predictedPair : [];
+  const trioSet = new Set(trioForLatest);
 
   document.getElementById('latestBallsGrid').innerHTML = latest.numbers
     .map(
       (n) => `
-      <div class="keno-ball ${predSet.has(n) ? 'matched-ball' : ''}" title="${predSet.has(n) ? 'Trùng số trong cặp dự đoán!' : ''}">
+      <div class="keno-ball ${trioSet.has(n) ? 'matched-ball' : ''}" title="${trioSet.has(n) ? 'Trùng số trong Bộ 3 dự đoán!' : ''}">
         ${pad2(n)}
       </div>
     `
@@ -92,16 +92,22 @@ function renderLatestDraw(analysis) {
 
   const banner = document.getElementById('latestReconcileBanner');
   if (btLatest && btLatest.drawId === latest.drawId) {
+    const trioStr = (btLatest.trioLabels || btLatest.predictedLabels).join(' - ');
     const pairStr = btLatest.predictedLabels.join(' - ');
-    if (btLatest.wonBac2) {
+    const matchedStr = (btLatest.trioMatched || []).join(', ');
+
+    if (btLatest.trioHitCount === 3) {
       banner.className = 'reconcile-banner hit2';
-      banner.innerHTML = `🎉 <strong>NỔ TRỌN 2/2 BẬC 2!</strong> Cặp dự đoán <strong>[${pairStr}]</strong> trúng đủ cả 2 số ở kỳ #${latest.drawId} → Nhận <strong>+90.000đ</strong> (vé 10k)!`;
-    } else if (btLatest.hitCount === 1) {
+      banner.innerHTML = `🔥 <strong>NỔ TRỌN 3/3 KENO BẬC 3!</strong> Bộ <strong>[${trioStr}]</strong> trúng cả 3 số (${matchedStr}) ở kỳ #${latest.drawId} → Nhận <strong>+400.000đ (x40)</strong>!`;
+    } else if (btLatest.trioHitCount === 2) {
+      banner.className = 'reconcile-banner hit2';
+      banner.innerHTML = `🎉 <strong>TRÚNG 2/3 BẬC 3 (+20.000đ)!</strong> Bộ <strong>[${trioStr}]</strong> nổ 2 số (<strong>${matchedStr}</strong>)${btLatest.wonBac2 ? ` · Trùng đúng Cặp 2/2 [${pairStr}] (+90k Bậc 2)` : ''}.`;
+    } else if (btLatest.trioHitCount === 1) {
       banner.className = 'reconcile-banner';
-      banner.innerHTML = `✅ <strong>Có mặt 1/2 số:</strong> Cặp dự đoán <strong>[${pairStr}]</strong> nổ số <strong>${pad2(btLatest.matchedNums[0])}</strong> ở kỳ #${latest.drawId}.`;
+      banner.innerHTML = `✅ <strong>Có 1/3 số (${matchedStr}):</strong> Bộ [${trioStr}] ở kỳ #${latest.drawId}. Chờ B3: ${analysis.backtestSummary?.bac3CurrentGap || 0}k.`;
     } else {
       banner.className = 'reconcile-banner miss';
-      banner.innerHTML = `⏭️ <strong>Chưa nổ:</strong> Cặp dự đoán <strong>[${pairStr}]</strong> (0/2 số) ở kỳ #${latest.drawId}. Chuỗi chờ 2/2 hiện tại: ${analysis.backtestSummary?.currentPairLoseStreak || 0} kỳ.`;
+      banner.innerHTML = `⏭️ <strong>Chưa nổ (0/3):</strong> Bộ [${trioStr}] ở kỳ #${latest.drawId}. Chuỗi chờ B3: ${analysis.backtestSummary?.bac3CurrentGap || 0} kỳ.`;
     }
   } else {
     banner.className = 'reconcile-banner miss';
@@ -110,16 +116,17 @@ function renderLatestDraw(analysis) {
 }
 
 /* ==========================================================================
-   2. RENDER SINGLE PREDICTED PAIR [A, B] FOR NEXT DRAW
+   2. RENDER SINGLE CHOSEN TRIO [A - B - C] FOR NEXT DRAW
    ========================================================================== */
 function renderPredictionShowcase(analysis) {
   if (!analysis || !analysis.prediction) return;
   const pred = analysis.prediction;
-  const { pairLabels, numAStats, numBStats, pairStats, summary } = pred;
+  const { trioLabels, pairLabels, numAStats, numBStats, numCStats, pairStats, wheel4, summary } = pred;
 
   document.getElementById('predNextDrawId').textContent = `#${analysis.nextDrawId}`;
-  document.getElementById('pairHeroBallA').textContent = pairLabels[0];
-  document.getElementById('pairHeroBallB').textContent = pairLabels[1];
+  document.getElementById('pairHeroBallA').textContent = trioLabels[0];
+  document.getElementById('pairHeroBallB').textContent = trioLabels[1];
+  document.getElementById('pairHeroBallC').textContent = trioLabels[2];
 
   const modeSel = document.getElementById('modeSelect');
   if (modeSel.value !== analysis.mode) modeSel.value = analysis.mode;
@@ -134,60 +141,80 @@ function renderPredictionShowcase(analysis) {
   const renderNumCard = (st, title) => `
     <div class="profile-title">${title} [${st.label}]</div>
     <div class="profile-row"><span>24 kỳ gần nhất:</span><strong>${st.f24}/24 (chuẩn 6.0)</strong></div>
-    <div class="profile-row"><span>25 kỳ / 10 kỳ:</span><strong>${st.f25}/25 · ${st.f10}/10</strong></div>
+    <div class="profile-row"><span>Lực Markov / Gan:</span><strong>${st.markovPct}% · ${st.gap}k</strong></div>
     <div class="profile-row"><span>Tần suất toàn mẫu:</span><strong>${st.fAll} lần (${st.rateAll}%)</strong></div>
-    <div class="profile-row"><span>Gan hiện tại:</span><strong>${st.gap} kỳ</strong></div>
   `;
 
-  document.getElementById('pairNumACard').innerHTML = renderNumCard(numAStats, 'Số thứ nhất');
-  document.getElementById('pairNumBCard').innerHTML = renderNumCard(numBStats, 'Số thứ hai');
+  document.getElementById('pairNumACard').innerHTML = renderNumCard(numAStats, 'Chủ lực 1 (Cặp 2/2)');
+  document.getElementById('pairNumBCard').innerHTML = renderNumCard(numBStats, 'Chủ lực 2 (Cặp 2/2)');
 
+  const cStat = numCStats || numBStats;
   document.getElementById('pairMutualMeta').innerHTML = `
-    <div class="profile-title">Cặp [${pairLabels[0]} - ${pairLabels[1]}]</div>
-    <div class="profile-row"><span>Cùng nổ 2/2:</span><strong>${pairStats.coocCount} lần (${pairStats.coocRate}%)</strong></div>
-    <div class="profile-row"><span>Chu kỳ TB của cặp:</span><strong>${pairStats.avgCycle ? pairStats.avgCycle + ' kỳ' : 'Chưa có'}</strong></div>
-    <div class="profile-row"><span>Gan cặp hiện tại:</span><strong class="text-gold">${pairStats.pairGap} kỳ</strong></div>
-    <div class="profile-row"><span>Chuẩn lý thuyết:</span><strong>6.01% (16.6 kỳ)</strong></div>
+    <div class="profile-title">Mảnh ghép Bậc 3 [${cStat.label}] & Cặp [${pairLabels[0]}-${pairLabels[1]}]</div>
+    <div class="profile-row"><span>Số [${cStat.label}] 24k / Markov / Gan:</span><strong>${cStat.f24}/24 · ${cStat.markovPct}% · ${cStat.gap}k</strong></div>
+    <div class="profile-row"><span>Cặp chính [${pairLabels[0]}-${pairLabels[1]}] cùng nổ:</span><strong>${pairStats.coocCount} lần · Gan <span class="text-gold">${pairStats.pairGap}k</span></strong></div>
+    <div class="profile-row"><span>Bộ 3 Bậc 3 [${trioLabels.join('-')}]:</span><strong>2/3: x2 · 3/3: x40 (Chuẩn 15.73%)</strong></div>
   `;
 
+  document.getElementById('wheelSupportBox').innerHTML = `
+    <div class="wheel-row">
+      <span>👑 <strong>Cặp 2/2 Mạnh Nhất Bên Trong:</strong> <span class="wheel-badge">${pairLabels.join(' - ')}</span> (Nổ 2/2: <strong>${summary.hit2Rate}%</strong> · RTP B2: <strong>${summary.bac2Rtp}%</strong>)</span>
+      <span class="text-gold"><strong>Vé B2 10k ăn 90.000đ</strong></span>
+    </div>
+    <div class="wheel-row" style="color:var(--text-secondary); font-size:0.7rem;">
+      <span>🔥 <strong>Mở rộng Bộ 4 Số (6 cặp B2 / Đá vòng):</strong> [${wheel4.labels.join(' - ')}] → Trúng ≥2/4 số: <strong>${summary.wheel4WinRate}%</strong> (${summary.wheel4AvgCycle}k/lần · MaxGan ${summary.wheel4MaxGap}k)</span>
+    </div>
+  `;
+
+  const netStr = (summary.bac3NetProfit10k >= 0 ? '+' : '') + formatVnd(summary.bac3NetProfit10k);
   document.getElementById('predKpiRow').innerHTML = `
     <div class="kpi-card">
-      <span>Tỷ lệ nổ 2/2 (${summary.evaluatedDraws} kỳ)</span>
+      <span>Trúng Bậc 3 (${summary.evaluatedDraws} kỳ)</span>
+      <strong>${summary.bac3WinRate}% (${summary.bac3WinCount} lần)</strong>
+      <small>2/3: ${summary.bac3Hit2Count} (${summary.bac3Hit2Rate}%) · 3/3: ${summary.bac3Hit3Count} (${summary.bac3Hit3Rate}%)</small>
+    </div>
+    <div class="kpi-card">
+      <span>RTP Keno Bậc 3 (Vé 10k)</span>
+      <strong class="text-gold">${summary.bac3Rtp}% (${netStr})</strong>
+      <small>Chuẩn lý thuyết: 84.21%</small>
+    </div>
+    <div class="kpi-card">
+      <span>Chu kỳ B3 · Có ≥1/3 số</span>
+      <strong class="text-cyan">${summary.bac3AvgCycle || '--'} kỳ/lần</strong>
+      <small>Chờ: ${summary.bac3CurrentGap}k · Max: ${summary.bac3MaxGap}k · ≥1/3: ${summary.bac3Hit1PlusRate}%</small>
+    </div>
+    <div class="kpi-card">
+      <span>Cặp 2/2 Chủ Lực [${pairLabels.join('-')}]</span>
       <strong>${summary.hit2Rate}% (${summary.hit2Count} lần)</strong>
-      <small>Chuẩn: 6.01% · z = ${summary.edge.z}</small>
-    </div>
-    <div class="kpi-card">
-      <span>Hoàn trả Bậc 2 (RTP x9)</span>
-      <strong class="text-gold">${summary.bac2Rtp}%</strong>
-      <small>Chuẩn lý thuyết: 54.11%</small>
-    </div>
-    <div class="kpi-card">
-      <span>Tỷ lệ có ≥ 1/2 số</span>
-      <strong class="text-cyan">${summary.hit1PlusRate}%</strong>
-      <small>Chuẩn: 43.99% (${summary.hit1PlusCount} kỳ)</small>
-    </div>
-    <div class="kpi-card">
-      <span>Chu kỳ TB · Chuỗi chờ</span>
-      <strong>${summary.avgHitCycle || '--'} kỳ/lần</strong>
-      <small>Đang chờ: ${summary.currentPairLoseStreak}k · Max: ${summary.maxPairLoseStreak}k</small>
+      <small>RTP B2: ${summary.bac2Rtp}% · ≥1/2: ${summary.hit1PlusRate}%</small>
     </div>
   `;
 
-  if (!appState.customInitialized && Array.isArray(pred.pair) && pred.pair.length === 2) {
+  if (!appState.customInitialized && Array.isArray(pred.trio) && pred.trio.length === 3) {
     appState.customInitialized = true;
-    document.getElementById('customNumA').value = pred.pair[0];
-    document.getElementById('customNumB').value = pred.pair[1];
+    document.getElementById('customNumA').value = pred.trio[0];
+    document.getElementById('customNumB').value = pred.trio[1];
+    document.getElementById('customNumC').value = pred.trio[2];
   }
 }
 
 /* ==========================================================================
-   3. CUSTOM 2-NUMBER PAIR INSPECTOR [X, Y] ON FULL HISTORY
+   3. CUSTOM 3-NUMBER TRIO INSPECTOR [X, Y, Z] (KENO BẬC 3) ON FULL HISTORY
    ========================================================================== */
-function setCustomPairAndInspect(a, b) {
+function setCustomPairAndInspect(a, b, c = null) {
   const numA = Math.min(80, Math.max(1, parseInt(a, 10) || 1));
-  const numB = Math.min(80, Math.max(1, parseInt(b, 10) || 2));
+  let numB = Math.min(80, Math.max(1, parseInt(b, 10) || 2));
+  if (numB === numA) numB = numA < 80 ? numA + 1 : 1;
+
+  const predThird = appState.analysis?.prediction?.wheel3?.backupNum || 58;
+  let numC = c !== null ? Math.min(80, Math.max(1, parseInt(c, 10) || predThird)) : predThird;
+  while (numC === numA || numC === numB) {
+    numC = numC < 80 ? numC + 1 : 1;
+  }
+
   document.getElementById('customNumA').value = numA;
-  document.getElementById('customNumB').value = numB === numA ? (numA < 80 ? numA + 1 : 1) : numB;
+  document.getElementById('customNumB').value = numB;
+  document.getElementById('customNumC').value = numC;
   renderCustomPairInspection();
 }
 
@@ -195,80 +222,89 @@ function renderCustomPairInspection() {
   const draws = appState.syncDraws.length > 0 ? appState.syncDraws : appState.recentDraws;
   const rawA = parseInt(document.getElementById('customNumA').value, 10);
   const rawB = parseInt(document.getElementById('customNumB').value, 10);
+  const rawC = parseInt(document.getElementById('customNumC').value, 10);
 
-  if (!draws || draws.length === 0 || Number.isNaN(rawA) || Number.isNaN(rawB) || rawA < 1 || rawA > 80 || rawB < 1 || rawB > 80 || rawA === rawB) {
+  if (
+    !draws ||
+    draws.length === 0 ||
+    [rawA, rawB, rawC].some((v) => Number.isNaN(v) || v < 1 || v > 80) ||
+    new Set([rawA, rawB, rawC]).size !== 3
+  ) {
     document.getElementById('customPairSummary').innerHTML =
-      `<div style="grid-column:1/-1; color:#f87171;">Vui lòng chọn 2 số khác nhau trong khoảng từ 01 đến 80.</div>`;
+      `<div style="grid-column:1/-1; color:#f87171;">Vui lòng chọn 3 số khác nhau trong khoảng từ 01 đến 80.</div>`;
     document.getElementById('customPairHitsList').innerHTML = '';
     return;
   }
 
-  const numA = Math.min(rawA, rawB);
-  const numB = Math.max(rawA, rawB);
+  const trio = [rawA, rawB, rawC];
   const sorted = [...draws].sort((x, y) => x.drawNumber - y.drawNumber);
   const N = sorted.length;
 
+  let hit3Count = 0;
   let hit2Count = 0;
   let hit1PlusCount = 0;
   let curGap = 0;
   let maxGap = 0;
-  const hit2Draws = [];
+  const winDraws = [];
 
   for (let i = 0; i < N; i++) {
     const d = sorted[i];
-    const hasA = d.numbers.includes(numA);
-    const hasB = d.numbers.includes(numB);
-    if (hasA || hasB) hit1PlusCount++;
-    if (hasA && hasB) {
-      hit2Count++;
+    const matched = trio.filter((n) => d.numbers.includes(n));
+    if (matched.length >= 1) hit1PlusCount++;
+    if (matched.length >= 2) {
+      if (matched.length === 3) hit3Count++;
+      else hit2Count++;
       curGap = 0;
-      hit2Draws.push(d);
+      winDraws.push({ ...d, hitCount: matched.length, prize: matched.length === 3 ? 400000 : 20000 });
     } else {
       curGap++;
       if (curGap > maxGap) maxGap = curGap;
     }
   }
 
-  const rate2 = ((hit2Count / N) * 100).toFixed(2);
+  const winTotal = hit2Count + hit3Count;
+  const winRate = ((winTotal / N) * 100).toFixed(2);
   const rate1Plus = ((hit1PlusCount / N) * 100).toFixed(2);
-  const avgCycle = hit2Count > 0 ? (N / hit2Count).toFixed(1) : '--';
+  const avgCycle = winTotal > 0 ? (N / winTotal).toFixed(1) : '--';
   const totalCost = N * 10000;
-  const totalPrize = hit2Count * 90000;
+  const totalPrize = hit2Count * 20000 + hit3Count * 400000;
   const rtp = ((totalPrize / totalCost) * 100).toFixed(1);
   const net = totalPrize - totalCost;
+  const labelStr = trio.map(pad2).join('-');
 
   document.getElementById('customPairSummary').innerHTML = `
     <div class="kpi-card">
-      <span>Cặp [${pad2(numA)} - ${pad2(numB)}] nổ 2/2</span>
-      <strong>${hit2Count} / ${N} kỳ (${rate2}%)</strong>
-      <small>Chuẩn lý thuyết: 6.01%</small>
+      <span>Bộ [${labelStr}] trúng B3</span>
+      <strong>${winRate}% (${winTotal}/${N})</strong>
+      <small>2/3: ${hit2Count} · 3/3: ${hit3Count} (Chuẩn 15.73%)</small>
     </div>
     <div class="kpi-card">
-      <span>RTP Bậc 2 (vé 10k)</span>
+      <span>RTP Keno Bậc 3 (10k)</span>
       <strong class="${net >= 0 ? 'text-green' : 'text-gold'}">${rtp}%</strong>
       <small>Lãi/Lỗ: ${net >= 0 ? '+' : ''}${formatVnd(net)}</small>
     </div>
     <div class="kpi-card">
-      <span>Gan cặp · MaxGan</span>
+      <span>Gan Bậc 3 · MaxGan</span>
       <strong class="text-cyan">${curGap} kỳ</strong>
-      <small>Cực đại: ${maxGap} kỳ · TB: ${avgCycle}k</small>
+      <small>Max: ${maxGap}k · TB: ${avgCycle}k/lần</small>
     </div>
     <div class="kpi-card">
-      <span>Tỷ lệ có ≥ 1/2 số</span>
+      <span>Tỷ lệ có ≥ 1/3 số</span>
       <strong>${rate1Plus}% (${hit1PlusCount} kỳ)</strong>
-      <small>Chuẩn lý thuyết: 43.99%</small>
+      <small>Chuẩn lý thuyết: 58.34%</small>
     </div>
   `;
 
-  const recentHits = hit2Draws.slice(-14).reverse();
+  const recentHits = winDraws.slice(-14).reverse();
   document.getElementById('customPairHitsList').innerHTML =
     recentHits.length > 0
       ? recentHits
           .map(
-            (d) => `<span class="hit-pill">Kỳ #${d.drawId} (${d.date} · ${d.time}) → +90.000đ</span>`
+            (d) =>
+              `<span class="hit-pill">Kỳ #${d.drawId} (${d.time}) [${d.hitCount}/3] → +${formatVnd(d.prize)}</span>`
           )
           .join('')
-      : `<span style="color:var(--text-muted)">Cặp [${pad2(numA)} - ${pad2(numB)}] chưa nổ cùng nhau 2/2 trong ${N} kỳ đang có.</span>`;
+      : `<span style="color:var(--text-muted)">Bộ [${labelStr}] chưa trúng Bậc 3 (≥2/3) trong ${N} kỳ đang có.</span>`;
 
   renderQuickTop15Numbers(appState.analysis);
 }
@@ -277,12 +313,13 @@ function renderQuickTop15Numbers(analysis) {
   const list = analysis?.analytics?.numberRankingTop15 || [];
   const curA = parseInt(document.getElementById('customNumA').value, 10);
   const curB = parseInt(document.getElementById('customNumB').value, 10);
+  const curC = parseInt(document.getElementById('customNumC').value, 10);
   const strip = document.getElementById('quickCompressedNumbers');
 
   strip.innerHTML = list
     .map((item) => {
       const cls =
-        item.num === curA || item.num === curB
+        item.num === curA || item.num === curB || item.num === curC
           ? 'selected-custom'
           : item.inPredictedPair
           ? 'active-pred'
@@ -300,9 +337,11 @@ function renderQuickTop15Numbers(analysis) {
       const clicked = parseInt(btn.getAttribute('data-num'), 10);
       const oldA = parseInt(document.getElementById('customNumA').value, 10) || 1;
       const oldB = parseInt(document.getElementById('customNumB').value, 10) || 2;
-      if (clicked === oldA || clicked === oldB) return;
+      const oldC = parseInt(document.getElementById('customNumC').value, 10) || 3;
+      if ([oldA, oldB, oldC].includes(clicked)) return;
       document.getElementById('customNumA').value = oldB;
-      document.getElementById('customNumB').value = clicked;
+      document.getElementById('customNumB').value = oldC;
+      document.getElementById('customNumC').value = clicked;
       renderCustomPairInspection();
     });
   });
@@ -314,59 +353,77 @@ function renderQuickTop15Numbers(analysis) {
 function renderAllTables(analysis) {
   if (!analysis) return;
 
-  // 1. All 2/2 Winning Events Log (Compact 4 columns for Mobile + Desktop)
-  const hit2Events = analysis.allHit2Events || [];
-  document.getElementById('allHit2CountBadge').textContent = `Tổng: ${hit2Events.length} kỳ nổ 2/2`;
-  document.getElementById('allHit2TableBody').innerHTML = hit2Events
+  // 1. All Keno Bac 3 Winning Events Log (2/3 +20k & 3/3 +400k)
+  const hitEvents = analysis.allHit2Events || [];
+  const summary = analysis.backtestSummary;
+  document.getElementById('allHit2CountBadge').textContent =
+    `Tổng: ${hitEvents.length} kỳ (${summary?.bac3Hit3Count || 0} kỳ 3/3 · ${summary?.bac3Hit2Count || 0} kỳ 2/3)`;
+
+  document.getElementById('allHit2TableBody').innerHTML = hitEvents
     .map((r) => {
-      const pSet = new Set(r.predictedPair);
+      const tSet = new Set(r.trio || r.predictedPair);
+      const trioArr = r.trioLabels || r.predictedLabels;
+      const is33 = r.trioHitCount === 3;
       return `
-        <tr>
+        <tr class="${is33 ? 'row-highlight' : ''}">
           <td style="font-family:var(--font-mono);">
             <strong>#${r.drawId}</strong><br />
             <small style="color:var(--text-muted); font-size:0.66rem;">${r.date.slice(0, 5)} · ${r.time}</small>
           </td>
-          <td><span class="pair-chip">[${r.predictedLabels.join(' - ')}]</span></td>
+          <td>
+            <span class="pair-chip">${trioArr.join(' - ')}</span><br />
+            <small style="font-size:0.65rem;" class="${is33 ? 'text-gold' : 'text-cyan'}">${is33 ? '🔥 3/3 Số' : '2/3 Số'}</small>
+          </td>
           <td>
             ${r.actualNumbers
-              .map((n) => `<span class="mini-ball ${pSet.has(n) ? 'hit' : ''}">${pad2(n)}</span>`)
+              .map((n) => `<span class="mini-ball ${tSet.has(n) ? 'hit' : ''}">${pad2(n)}</span>`)
               .join('')}
           </td>
-          <td style="font-family:var(--font-mono); white-space:nowrap;" class="text-green"><strong>+90k</strong></td>
+          <td style="font-family:var(--font-mono); white-space:nowrap;" class="${is33 ? 'text-gold' : 'text-green'}">
+            <strong>+${is33 ? '400k' : '20k'}</strong>
+          </td>
         </tr>
       `;
     })
     .join('');
 
   // 2. Walk-Forward 150 Draws Table
-  const summary = analysis.backtestSummary;
   document.getElementById('btEvalBadge').textContent = `Đã đối soát: ${summary?.evaluatedDraws || 0} kỳ`;
   document.getElementById('backtestTableBody').innerHTML = (analysis.backtestHistory || [])
     .map((r) => {
-      const pSet = new Set(r.predictedPair);
-      const hitBallsOnly = r.actualNumbers.filter((n) => pSet.has(n));
-      const statusHtml = r.wonBac2
-        ? `<span class="text-gold"><strong>🎉 NỔ 2/2</strong></span>`
-        : r.hitCount === 1
-        ? `<span class="text-green">✅ Có 1/2 (${pad2(hitBallsOnly[0])})</span>`
-        : `<span style="color:var(--text-muted)">0/2</span>`;
-      const prizeHtml = r.wonBac2
-        ? `<strong class="text-gold">+${formatVnd(r.prize)}</strong>`
+      const trioArr = r.trioLabels || r.predictedLabels;
+      const matchedStr = (r.trioMatched || []).join(', ');
+
+      let b3Html = `<span style="color:var(--text-muted)">0/3</span>`;
+      if (r.trioHitCount === 3) {
+        b3Html = `<span class="text-gold"><strong>🔥 3/3 (${matchedStr})</strong></span>`;
+      } else if (r.trioHitCount === 2) {
+        b3Html = `<span class="text-green"><strong>🎉 2/3 (${matchedStr})</strong></span>`;
+      } else if (r.trioHitCount === 1) {
+        b3Html = `<span style="color:var(--text-secondary)">1/3 (${matchedStr})</span>`;
+      }
+
+      const b2Html = r.wonBac2
+        ? `<span class="text-gold"><strong>✅ [${r.predictedLabels.join('-')}]</strong></span>`
+        : `<span style="color:var(--text-muted)">[${r.predictedLabels.join('-')}] (${r.hitCount}/2)</span>`;
+
+      const prizeHtml = r.bac3Prize > 0
+        ? `<strong class="${r.trioHitCount === 3 ? 'text-gold' : 'text-green'}">+${formatVnd(r.bac3Prize)}</strong>`
         : `<span style="color:var(--text-muted)">0đ</span>`;
 
       return `
-        <tr class="${r.wonBac2 ? 'row-highlight' : ''}">
+        <tr class="${r.wonBac3 ? 'row-highlight' : ''}">
           <td style="font-family:var(--font-mono);">#${r.drawId} <small style="color:var(--text-muted)">(${r.time})</small></td>
-          <td><span class="pair-chip">[${r.predictedLabels.join(' - ')}]</span></td>
-          <td>${statusHtml}</td>
-          <td style="font-family:var(--font-mono);">${r.hitCount}/2</td>
+          <td><span class="pair-chip">[${trioArr.join(' - ')}]</span></td>
+          <td style="font-family:var(--font-mono);">${b3Html}</td>
+          <td style="font-family:var(--font-mono);">${b2Html}</td>
           <td style="font-family:var(--font-mono);">${prizeHtml}</td>
         </tr>
       `;
     })
     .join('');
 
-  // 3. Strategy Comparison Table
+  // 3. Strategy Comparison Table (Bac 3 + Bac 2)
   document.getElementById('strategyCompTableBody').innerHTML = (analysis.strategyComparison || [])
     .map(
       (s) => `
@@ -374,13 +431,13 @@ function renderAllTables(analysis) {
         <td>
           <strong>${s.isSelected ? '👉 ' : ''}${s.shortLabel}</strong>
         </td>
-        <td style="font-family:var(--font-mono);" class="${s.hit2Rate > 6.01 ? 'text-green' : ''}">
-          <strong>${s.hit2Rate}%</strong> <small>(${s.hit2Count})</small>
+        <td style="font-family:var(--font-mono);" class="${s.bac3WinRate > 15.73 ? 'text-green' : ''}">
+          <strong>${s.bac3WinRate}%</strong> <small>(${s.bac3WinCount})</small>
         </td>
-        <td style="font-family:var(--font-mono);">${s.bac2Rtp}%</td>
-        <td style="font-family:var(--font-mono);">${s.hit1PlusRate}%</td>
-        <td style="font-family:var(--font-mono);">${s.maxPairLoseStreak}k</td>
-        <td style="font-family:var(--font-mono);">${s.avgHitCycle || '--'}k</td>
+        <td style="font-family:var(--font-mono);">${s.bac3Hit3Count} lần (${s.bac3Hit3Rate}%)</td>
+        <td style="font-family:var(--font-mono);" class="${s.bac3Rtp >= 100 ? 'text-gold' : ''}"><strong>${s.bac3Rtp}%</strong></td>
+        <td style="font-family:var(--font-mono);">${s.hit2Rate}% (${s.bac2Rtp}%)</td>
+        <td style="font-family:var(--font-mono);">${s.bac3MaxGap}k</td>
       </tr>
     `
     )
@@ -599,11 +656,12 @@ function initControls() {
 
   document.getElementById('customNumA').addEventListener('change', renderCustomPairInspection);
   document.getElementById('customNumB').addEventListener('change', renderCustomPairInspection);
+  document.getElementById('customNumC').addEventListener('change', renderCustomPairInspection);
 
   document.getElementById('applyPredToInspectorBtn').addEventListener('click', () => {
-    const pair = appState.analysis?.prediction?.pair;
-    if (Array.isArray(pair) && pair.length === 2) {
-      setCustomPairAndInspect(pair[0], pair[1]);
+    const trio = appState.analysis?.prediction?.trio;
+    if (Array.isArray(trio) && trio.length === 3) {
+      setCustomPairAndInspect(trio[0], trio[1], trio[2]);
     }
   });
 }

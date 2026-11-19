@@ -4,11 +4,11 @@ const STORAGE_CACHE_KEY = 'keno_pair_cached_draws_v3';
 const MY_SESSION_STORAGE_KEY = 'keno_my_100k_session_v1';
 
 const MY_SESSION_STEPS = [
-  { step: 1, type: 'B3', stake: 10000, shortLabel: 'B1: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 lãi +10k' },
-  { step: 2, type: 'B3', stake: 10000, shortLabel: 'B2: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 Hòa 100k' },
-  { step: 3, type: 'B3', stake: 20000, shortLabel: 'B3: 20k B3', desc: 'Vé Bậc 3 (20k) — Trúng 2/3 Hòa 100k' },
-  { step: 4, type: 'B3', stake: 40000, shortLabel: 'B4: 40k B3', desc: 'Vé Bậc 3 (40k) — Trúng 2/3 Hòa 100k' },
-  { step: 5, type: 'B2', stake: 10000, shortLabel: 'B5: 10k B2', desc: 'Phao Bậc 2 (10k) — Nổ 2/2 về lại 100k (Giữ 10k)' }
+  { step: 1, type: 'B3', stake: 10000, shortLabel: 'B1: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 thu 20k (Lãi +10k) · 3/3 thu 400k' },
+  { step: 2, type: 'B3', stake: 10000, shortLabel: 'B2: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 thu 20k (Hòa 100k) · 3/3 thu 400k' },
+  { step: 3, type: 'B3', stake: 30000, shortLabel: 'B3: 30k B3', desc: 'Vé Bậc 3 (30k) — Trúng 2/3 thu 60k (Lãi +10k) · 3/3 thu 1.200k' },
+  { step: 4, type: 'W3', stake: 30000, shortLabel: 'B4: 30k Đá B2', desc: 'Đá Vòng 3 Cặp B2 (30k) — Trúng bất kỳ 2/3 số thu 90k (Lãi +10k) · 3/3 thu 270k' },
+  { step: 5, type: 'B2', stake: 10000, shortLabel: 'B5: 10k B2', desc: 'Phao Bậc 2 (10k) — Nổ 2/2 thu 90k về lại 100k (Giữ 10k dự phòng)' }
 ];
 
 function loadMySessionState() {
@@ -241,7 +241,10 @@ function computeMyPersonalSession(analysis, startDrawNumber) {
   let bank = 100000;
   let vaultProfit = 0;
   let stepIdx = 0;
-  let consecMisses = 0;
+  let waitingForTrigger = false;
+  let justSkippedCooldown = false;
+  let localGap = 0;
+  const localWin6 = [];
   let sessionCount = 1;
   let wins = 0;
   let evens = 0;
@@ -249,111 +252,177 @@ function computeMyPersonalSession(analysis, startDrawNumber) {
   const log = [];
 
   for (const r of drawsAsc) {
-    if (consecMisses === 2) {
+    const preGap = typeof r.preDrawVGapB3 === 'number' ? r.preDrawVGapB3 : localGap;
+    const hits6 =
+      typeof r.recentHits6 === 'number'
+        ? r.recentHits6
+        : localWin6.reduce((s, v) => s + v, 0);
+
+    if (waitingForTrigger && preGap === 0 && hits6 < 4) {
+      waitingForTrigger = false;
+    }
+    if (!waitingForTrigger && stepIdx === 0 && hits6 >= 4) {
+      waitingForTrigger = true;
+    }
+
+    if (waitingForTrigger) {
       log.push({
         drawId: r.drawId,
         time: r.time,
         type: 'SKIP',
-        label: '⏸️ Nghỉ 0đ (Né nhịp)',
+        label: hits6 >= 4 ? '⏸️ Nghỉ 0đ (Xả nhiệt)' : '⏸️ Nghỉ 0đ (Chờ cầu mồi)',
         stake: 0,
         prize: 0,
         bankAfter: bank,
         outcome: 'SKIP',
         picks: (r.trioLabels || r.predictedLabels).join('-')
       });
-      consecMisses = 0;
-      continue;
-    }
-
-    const stepCfg = MY_SESSION_STEPS[stepIdx];
-    const mult = stepCfg.stake / 10000;
-    bank -= stepCfg.stake;
-
-    const prize =
-      stepCfg.type === 'B3'
-        ? (r.bac3Prize || 0) * mult
-        : (r.wonBac2 ? 90000 : 0) * mult;
-    bank += prize;
-
-    let outcome = 'IN_PROGRESS';
-    const bankSnapshot = bank;
-    if (bank >= 100000) {
-      const net = bank - 100000;
-      vaultProfit += net;
-      if (net > 0) {
-        wins++;
-        outcome = 'WIN_RESET';
-      } else {
-        evens++;
-        outcome = 'EVEN_RESET';
-      }
+    } else if (stepIdx === 3 && !justSkippedCooldown && hits6 >= 2) {
+      justSkippedCooldown = true;
       log.push({
         drawId: r.drawId,
         time: r.time,
-        type: stepCfg.type,
-        label: stepCfg.shortLabel,
-        stake: stepCfg.stake,
-        prize,
-        bankAfter: bankSnapshot,
-        outcome,
-        picks: (stepCfg.type === 'B3' ? r.trioLabels : r.predictedLabels).join('-')
+        type: 'SKIP',
+        label: '⏸️ Nghỉ 0đ (Né nhịp xả)',
+        stake: 0,
+        prize: 0,
+        bankAfter: bank,
+        outcome: 'SKIP',
+        picks: (r.trioLabels || r.predictedLabels).join('-')
       });
-      bank = 100000;
-      stepIdx = 0;
-      consecMisses = 0;
-      sessionCount++;
-    } else if (stepIdx === MY_SESSION_STEPS.length - 1) {
-      stopLosses++;
-      vaultProfit += bank - 100000;
-      outcome = 'STOP_LOSS_KEEP_10K';
-      log.push({
-        drawId: r.drawId,
-        time: r.time,
-        type: stepCfg.type,
-        label: stepCfg.shortLabel,
-        stake: stepCfg.stake,
-        prize,
-        bankAfter: bankSnapshot,
-        outcome,
-        picks: r.predictedLabels.join('-')
-      });
-      bank = 100000;
-      stepIdx = 0;
-      consecMisses = 0;
-      sessionCount++;
     } else {
-      log.push({
-        drawId: r.drawId,
-        time: r.time,
-        type: stepCfg.type,
-        label: stepCfg.shortLabel,
-        stake: stepCfg.stake,
-        prize,
-        bankAfter: bankSnapshot,
-        outcome,
-        picks: (stepCfg.type === 'B3' ? r.trioLabels : r.predictedLabels).join('-')
-      });
-      stepIdx++;
-      consecMisses++;
+      justSkippedCooldown = false;
+      const stepCfg = MY_SESSION_STEPS[stepIdx];
+      bank -= stepCfg.stake;
+
+      let prize = 0;
+      if (stepCfg.type === 'B3') {
+        prize = (r.bac3Prize || 0) * (stepCfg.stake / 10000);
+      } else if (stepCfg.type === 'W3') {
+        prize = (r.wheel3Prize || 0) * (stepCfg.stake / 30000);
+      } else {
+        prize = (r.wonBac2 ? 90000 : 0) * (stepCfg.stake / 10000);
+      }
+      bank += prize;
+
+      let outcome = 'IN_PROGRESS';
+      const bankSnapshot = bank;
+      const picksStr =
+        stepCfg.type === 'B2'
+          ? r.predictedLabels.join('-')
+          : (r.trioLabels || r.predictedLabels).join('-');
+
+      if (bank >= 100000 && prize > 0) {
+        const net = bank - 100000;
+        vaultProfit += net;
+        if (net > 0) {
+          wins++;
+          outcome = 'WIN_RESET';
+        } else {
+          evens++;
+          outcome = 'EVEN_RESET';
+        }
+        log.push({
+          drawId: r.drawId,
+          time: r.time,
+          type: stepCfg.type,
+          label: stepCfg.shortLabel,
+          stake: stepCfg.stake,
+          prize,
+          bankAfter: bankSnapshot,
+          outcome,
+          picks: picksStr
+        });
+        bank = 100000;
+        stepIdx = 0;
+        waitingForTrigger = false;
+        sessionCount++;
+      } else if (stepIdx === MY_SESSION_STEPS.length - 1) {
+        stopLosses++;
+        vaultProfit += bank - 100000;
+        outcome = 'STOP_LOSS_KEEP_10K';
+        log.push({
+          drawId: r.drawId,
+          time: r.time,
+          type: stepCfg.type,
+          label: stepCfg.shortLabel,
+          stake: stepCfg.stake,
+          prize,
+          bankAfter: bankSnapshot,
+          outcome,
+          picks: picksStr
+        });
+        bank = 100000;
+        stepIdx = 0;
+        waitingForTrigger = true;
+        sessionCount++;
+      } else {
+        log.push({
+          drawId: r.drawId,
+          time: r.time,
+          type: stepCfg.type,
+          label: stepCfg.shortLabel,
+          stake: stepCfg.stake,
+          prize,
+          bankAfter: bankSnapshot,
+          outcome,
+          picks: picksStr
+        });
+        stepIdx++;
+      }
     }
+
+    if (r.wonBac3) localGap = 0;
+    else localGap++;
+    localWin6.push(r.wonBac3 ? 1 : 0);
+    if (localWin6.length > 6) localWin6.shift();
   }
 
   const nextId = analysis.nextDrawId || '------';
   const trioStr = analysis.prediction.trioLabels.join(' - ');
   const pairStr = analysis.prediction.pairLabels.join(' - ');
-  const isSkip = consecMisses === 2;
+  const recent6ForNext = (analysis.backtestHistory || [])
+    .slice(0, 6)
+    .filter((r) => r.wonBac3).length;
+  const nextPreGapB3 = analysis.backtestSummary?.bac3CurrentGap ?? localGap;
+
+  let nextWaiting = waitingForTrigger;
+  if (nextWaiting && nextPreGapB3 === 0 && recent6ForNext < 4) {
+    nextWaiting = false;
+  }
+  if (!nextWaiting && stepIdx === 0 && recent6ForNext >= 4) {
+    nextWaiting = true;
+  }
+  const isCooldownSkip =
+    !nextWaiting && stepIdx === 3 && !justSkippedCooldown && recent6ForNext >= 2;
+  const isSkip = nextWaiting || isCooldownSkip;
   const curStep = MY_SESSION_STEPS[stepIdx];
 
   let nextInstruction = '';
-  if (isSkip) {
-    nextInstruction = `⏸️ BƯỚC TIẾP THEO (Kỳ #${nextId}): TẠM NGHỈ QUAN SÁT 0Đ (vừa trượt 2 kỳ liên tiếp trong phiên). Giữ nguyên ví ${formatVnd(bank)}, kỳ kế tiếp vào ${curStep.shortLabel}.`;
+  if (nextWaiting) {
+    nextInstruction =
+      recent6ForNext >= 4
+        ? `⏸️ BƯỚC TIẾP THEO (Kỳ #${nextId}): NGHỈ XẢ NHIỆT 0Đ (vừa nổ ${recent6ForNext}/6 kỳ). Giữ nguyên ví ${formatVnd(bank)}, chờ nhịp xả xong và có kỳ nổ mồi mới!`
+        : `⏸️ BƯỚC TIẾP THEO (Kỳ #${nextId}): KHÓA VÍ CHỜ CẦU MỒI 0Đ (tránh chuỗi gan lạnh ${nextPreGapB3}k). Giữ nguyên ví ${formatVnd(bank)}, mở phiên B1 ngay khi có kỳ nổ mồi 2/3 hoặc 3/3!`;
+  } else if (isCooldownSkip) {
+    nextInstruction = `⏸️ BƯỚC TIẾP THEO (Kỳ #${nextId}): TẠM NGHỈ QUAN SÁT 0Đ (cầu đã nổ ${recent6ForNext}/6 kỳ, né 1 kỳ xả trước Bước 4). Giữ nguyên ví ${formatVnd(bank)}, kỳ kế tiếp vào ${curStep.shortLabel}.`;
   } else if (curStep.type === 'B3') {
     const mult = curStep.stake / 10000;
     const r2 = 20000 * mult;
     const r3 = 400000 * mult;
     const bankAfterWin2 = bank - curStep.stake + r2;
-    const resWord = bankAfterWin2 > 100000 ? `LÃI +${formatVnd(bankAfterWin2 - 100000)}` : `HÒA ĐÚNG 100.000đ`;
+    const resWord =
+      bankAfterWin2 > 100000
+        ? `LÃI +${formatVnd(bankAfterWin2 - 100000)}`
+        : `HÒA ĐÚNG 100.000đ`;
     nextInstruction = `👉 BƯỚC ${curStep.step}/5 CỦA BẠN (Kỳ #${nextId}): Mua vé BẬC 3 bộ [${trioStr}] giá ${formatVnd(curStep.stake)} (Ví ${formatVnd(bank)} → còn ${formatVnd(bank - curStep.stake)}). Trúng 2/3 thu ${formatVnd(r2)} (${resWord}) · Trúng 3/3 thu ${formatVnd(r3)}!`;
+  } else if (curStep.type === 'W3') {
+    const pairsText = (analysis.prediction.wheel3?.pairs || [])
+      .map((p) => `[${pad2(p[0])}-${pad2(p[1])}]`)
+      .join(', ');
+    const afterWin1 = bank - curStep.stake + 90000;
+    const net1 = afterWin1 - 100000;
+    nextInstruction = `🔥 BƯỚC 4/5 ĐÁ VÒNG 3 CẶP B2 (Kỳ #${nextId}): Mua 3 vé BẬC 2 (${pairsText}) x 10.000đ = 30.000đ. Trúng bất kỳ 2/3 số thu 90.000đ (${net1 >= 0 ? `LÃI +${formatVnd(net1)}` : formatVnd(afterWin1)}) · Trúng 3/3 thu 270.000đ!`;
   } else {
     nextInstruction = `🛡️ BƯỚC 5/5 PHAO CỨU SINH (Kỳ #${nextId}): Mua vé BẬC 2 Cặp [${pairStr}] giá 10.000đ (luôn giữ 10.000đ dự phòng). Nổ 2/2 thu 90.000đ đưa ví về đúng 100.000đ HÒA VỐN!`;
   }
@@ -379,6 +448,12 @@ function computeMyPersonalSession(analysis, startDrawNumber) {
     })),
     log: log.reverse()
   };
+}
+
+function getTargetModeLabel(targetMode) {
+  if (targetMode === 'B3') return 'Bậc 3';
+  if (targetMode === 'W3') return 'Đá 3 Cặp B2';
+  return 'Bậc 2';
 }
 
 function renderPlayer100kPanel(analysis) {
@@ -411,7 +486,7 @@ function renderPlayer100kPanel(analysis) {
     badgeEl.className = 'player-action-badge' + (mine.isSkip ? ' skip' : '');
     badgeEl.textContent = mine.isSkip
       ? `⏸️ Tạm nghỉ 0đ · Ví ${formatVnd(mine.bank)}`
-      : `Bạn đang Bước ${mine.stepNumber}/5: ${formatVnd(mine.stake)} (${mine.targetMode === 'B3' ? 'Bậc 3' : 'Bậc 2'})`;
+      : `Bạn đang Bước ${mine.stepNumber}/5: ${formatVnd(mine.stake)} (${getTargetModeLabel(mine.targetMode)})`;
     instrEl.textContent = mine.nextInstruction;
     activeStepsPlan = mine.stepsPlan;
 
@@ -450,7 +525,7 @@ function renderPlayer100kPanel(analysis) {
     badgeEl.className = 'player-action-badge' + (na.isCooldownSkip ? ' skip' : '');
     badgeEl.textContent = na.isCooldownSkip
       ? `⏸️ Tạm nghỉ 0đ · Ví còn ${formatVnd(na.currentBank)}`
-      : `Bước ${na.stepNumber}/5: ${formatVnd(na.recommendedStake)} (${na.targetMode === 'B3' ? 'Bậc 3' : 'Bậc 2'}) · Ví ${formatVnd(na.currentBank)}`;
+      : `Bước ${na.stepNumber}/5: ${formatVnd(na.recommendedStake)} (${getTargetModeLabel(na.targetMode)}) · Ví ${formatVnd(na.currentBank)}`;
     instrEl.textContent = na.ticketInstruction;
   }
 
@@ -960,9 +1035,11 @@ function initControls() {
 
   document.getElementById('demoMySession5Btn').addEventListener('click', () => {
     const latestNum = appState.analysis?.latestDraw?.drawNumber || 303151;
+    const bt = appState.analysis?.backtestHistory || [];
+    const cycleStart = bt.slice(4, 15).find((r) => r.preDrawVGapB3 === 0);
     appState.mySession = {
       active: true,
-      startDrawNumber: Math.max(1, latestNum - 4),
+      startDrawNumber: cycleStart ? cycleStart.drawNumber : Math.max(1, latestNum - 5),
       startedAt: new Date().toISOString()
     };
     saveMySessionState(appState.mySession);

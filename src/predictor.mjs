@@ -2,11 +2,11 @@
  * Vietlott Keno Bậc 3 & Bậc 2 — Tactical Predictor + 100k Bankroll Player Engine
  *
  * Kết hợp:
- * 1. Ba thuật toán chọn Bộ 3 [A-B-C] & Cặp Chủ Lực [A-B] tối ưu (Khử bóng chết + Markov + Cooc).
+ * 1. Ba thuật toán chọn Bộ 3 [A-B-C] & Cặp Chủ Lực [A-B] tối ưu (Khử bóng chết <=10k + Markov + Cooc).
  * 2. Bộ Mô Phỏng Người Chơi Thực Chiến Vốn 100.000đ:
- *    - Chia vốn 5 bước (90k đánh + luôn giữ 10k dự phòng => 0% cháy túi):
- *      B1: 10k B3 -> B2: 10k B3 -> B3: 20k B3 -> B4: 40k B3 -> B5: 10k B2 Phao Cứu Sinh.
- *    - Tự động né nhịp xả cầu (vGapB3 === 2: đứng ngoài quan sát 0đ 1 kỳ).
+ *    - Chia vốn 5 bước (90k đánh + luôn giữ 10k dự phòng => 0% cháy túi), thắng B1, B3, B4 đều CÓ LÃI:
+ *      B1: 10k B3 -> B2: 10k B3 -> B3: 30k B3 -> B4: 30k Đá B2 (3 cặp) -> B5: 10k B2 Phao Cứu Sinh.
+ *    - Khóa ví chống cầu lạnh (chờ nổ mồi + né bão quá nhiệt >=4/6 kỳ) & né nhịp xả trước B4 khi >=2/6 kỳ.
  */
 
 export const THEORETICAL_KENO_PAIR = {
@@ -30,30 +30,48 @@ export const THEORETICAL_KENO_PAIR = {
 export const STRATEGIES = {
   hybrid_markov_cooc: {
     key: 'hybrid_markov_cooc',
-    label: 'Markov + Cooc 60k (An Toàn Vốn 100k: 60.2% · RTP 154.2%)',
+    label: 'Markov + Cooc 60k (An Toàn Vốn 100k: 67.5% · Lãi 150k +1.050k)',
     shortLabel: 'Markov + Cooc',
-    maxNumGap: 14,
-    wCooc60: 25,
+    maxNumGap: 10,
+    anchorCount: 7,
+    wF24: 13,
+    wMarkov: 45,
+    wCoocAll: 55,
+    wCooc60: 35,
+    dueMin: 14,
+    dueMax: 38,
     description:
-      'Khử bóng gan lì >14k, lọc Top 6 hạt nhân nén 24k có lực Markov cao nhất để chốt Cặp [A-B] & Mảnh ghép B3 [C]; tỷ lệ bảo toàn vốn 100k cao nhất.'
+      'Khử bóng gan lì >10k, lọc Top 7 hạt nhân nén 24k có lực Markov cao nhất để chốt Cặp [A-B] & Mảnh ghép B3 [C]; cân bằng giữa tỷ lệ nổ 19.43% và bảo toàn vốn 100k.'
   },
   triad_synergy_core: {
     key: 'triad_synergy_core',
-    label: 'Bộ 3 Nén Thuần Khiết (Cặp 2/2: 8.29% · RTP 150.7%)',
-    shortLabel: 'Nén Thuần 3 Số',
-    maxNumGap: 14,
-    wCooc60: 0,
+    label: 'Bộ 3 Nén Cộng Hưởng (Cặp 2/2: 8.29% · An Toàn 67.5%)',
+    shortLabel: 'Nén Cộng Hưởng',
+    maxNumGap: 10,
+    anchorCount: 7,
+    wF24: 12,
+    wMarkov: 40,
+    wCoocAll: 60,
+    wCooc60: 25,
+    dueMin: 14,
+    dueMax: 38,
     description:
-      'Chọn thẳng Top 3 số nén sâu nhất khung 24k có nền dài hạn & lực kéo Markov cao nhất; bên trong chọn cặp đồng xuất hiện mạnh nhất làm Cặp 2/2.'
+      'Lọc Top 7 hạt nhân nén sâu <=10k, ưu tiên tương hợp lịch sử dài hạn để chốt Cặp 2/2 [A-B] mạnh nhất (8.29%) và Mảnh ghép Bậc 3 [C].'
   },
   triad_jackpot_33: {
     key: 'triad_jackpot_33',
-    label: 'Tam Giác Đồng Xuất Hiện (Săn 3/3 x40 · RTP 172.4%)',
-    shortLabel: 'Săn 3/3 (x40)',
-    maxNumGap: 14,
-    wCooc60: 20,
+    label: 'Tam Giác Đồng Xuất Hiện (Mở Rộng Top 9 · B3 19.29% · RTP 134%)',
+    shortLabel: 'Mở Rộng Top 9',
+    maxNumGap: 10,
+    anchorCount: 9,
+    wF24: 14,
+    wMarkov: 45,
+    wCoocAll: 50,
+    wCooc60: 40,
+    dueMin: 14,
+    dueMax: 38,
     description:
-      'Quét toàn bộ C(8,3)=56 tam giác từ Top 8 hạt nhân để chọn Bộ 3 có lực cộng hưởng cả 3 cạnh cao nhất, chuyên săn nổ trọn 3/3 (x40).'
+      'Mở rộng quét Top 9 hạt nhân nén <=10k kết hợp đồng xuất hiện ngắn hạn 60k và Markov mạnh để bắt Bộ 3 ổn định trên mọi khung kỳ.'
   }
 };
 
@@ -62,16 +80,22 @@ const BASELINE_STRATEGY = {
   label: 'Đối chứng cố định [01, 02, 03]',
   shortLabel: 'Đối chứng [01-03]',
   maxNumGap: 999,
+  anchorCount: 3,
+  wF24: 0,
+  wMarkov: 0,
+  wCoocAll: 0,
   wCooc60: 0,
+  dueMin: 14,
+  dueMax: 38,
   description: 'Luôn giữ nguyên bộ [01, 02, 03] ở mọi kỳ để làm mốc so sánh.'
 };
 
 export const PLAYER_100K_STEPS = [
-  { step: 1, type: 'B3', stake: 10000, shortLabel: 'B1: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 lãi +10k' },
-  { step: 2, type: 'B3', stake: 10000, shortLabel: 'B2: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 Hòa 100k' },
-  { step: 3, type: 'B3', stake: 20000, shortLabel: 'B3: 20k B3', desc: 'Vé Bậc 3 (20k) — Trúng 2/3 Hòa 100k' },
-  { step: 4, type: 'B3', stake: 40000, shortLabel: 'B4: 40k B3', desc: 'Vé Bậc 3 (40k) — Trúng 2/3 Hòa 100k' },
-  { step: 5, type: 'B2', stake: 10000, shortLabel: 'B5: 10k B2', desc: 'Phao Bậc 2 (10k) — Nổ 2/2 về lại 100k (Giữ 10k)' }
+  { step: 1, type: 'B3', stake: 10000, shortLabel: 'B1: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 thu 20k (Lãi +10k) · 3/3 thu 400k' },
+  { step: 2, type: 'B3', stake: 10000, shortLabel: 'B2: 10k B3', desc: 'Vé Bậc 3 (10k) — Trúng 2/3 thu 20k (Hòa 100k) · 3/3 thu 400k' },
+  { step: 3, type: 'B3', stake: 30000, shortLabel: 'B3: 30k B3', desc: 'Vé Bậc 3 (30k) — Trúng 2/3 thu 60k (Lãi +10k) · 3/3 thu 1.200k' },
+  { step: 4, type: 'W3', stake: 30000, shortLabel: 'B4: 30k Đá B2', desc: 'Đá Vòng 3 Cặp B2 (30k) — Trúng bất kỳ 2/3 số thu 90k (Lãi +10k) · 3/3 thu 270k' },
+  { step: 5, type: 'B2', stake: 10000, shortLabel: 'B5: 10k B2', desc: 'Phao Bậc 2 (10k) — Nổ 2/2 thu 90k về lại 100k (Giữ 10k dự phòng)' }
 ];
 
 export const DEFAULT_STRATEGY = 'hybrid_markov_cooc';
@@ -214,11 +238,19 @@ export function selectSinglePairAtStep(state, mode = DEFAULT_STRATEGY) {
     backupD = 4;
     reason = 'Mốc đối chứng cố định bộ [01, 02, 03] qua mọi kỳ.';
   } else {
+    const anchorCount = cfg.anchorCount ?? 7;
+    const wF24 = cfg.wF24 ?? 13;
+    const wMarkov = cfg.wMarkov ?? 45;
+    const wCoocAll = cfg.wCoocAll ?? 55;
+    const wCooc60 = cfg.wCooc60 ?? 35;
+    const dueMin = cfg.dueMin ?? 14;
+    const dueMax = cfg.dueMax ?? 38;
+
     const filtered = ALL_NUMS_BASE.filter((x) => {
       const g = lastNumIdx[x] === -1 ? N : N - 1 - lastNumIdx[x];
       return g <= cfg.maxNumGap;
     });
-    const poolBase = filtered.length >= 8 ? filtered : [...ALL_NUMS_BASE];
+    const poolBase = filtered.length >= Math.max(8, anchorCount) ? filtered : [...ALL_NUMS_BASE];
     poolBase.sort((a, b) => {
       if (f24[a] !== f24[b]) return f24[a] - f24[b];
       if (fAll[a] !== fAll[b]) return fAll[b] - fAll[a];
@@ -226,90 +258,46 @@ export function selectSinglePairAtStep(state, mode = DEFAULT_STRATEGY) {
       return a - b;
     });
 
-    if (mode === 'triad_synergy_core') {
-      const top3 = poolBase.slice(0, 3);
-      const pairs = [
-        [top3[0], top3[1]],
-        [top3[0], top3[2]],
-        [top3[1], top3[2]]
-      ].sort(
-        (pA, pB) =>
-          coocAll[pB[0]][pB[1]] - coocAll[pA[0]][pA[1]] ||
-          f24[pA[0]] + f24[pA[1]] - (f24[pB[0]] + f24[pB[1]])
-      );
-      pair = pairs[0].sort((x, y) => x - y);
-      backupC = top3.find((x) => x !== pair[0] && x !== pair[1]) || top3[2];
-      backupD = poolBase[3] || 4;
-      reason = `Lấy Top 3 hạt nhân nén sâu nhất 24k ([${top3.map(pad2).join('-')}]), chọn cặp [${pair.map(pad2).join('-')}] có tương hợp lịch sử cao nhất làm Cặp Bậc 2.`;
-    } else if (mode === 'triad_jackpot_33') {
-      const anchors = poolBase.slice(0, 8);
-      let bestTrio = [anchors[0], anchors[1], anchors[2]];
-      let bestSc = -1e9;
-      for (let a = 0; a < anchors.length; a++) {
-        for (let b = a + 1; b < anchors.length; b++) {
-          for (let c = b + 1; c < anchors.length; c++) {
-            const u = anchors[a], v = anchors[b], w = anchors[c];
-            const sumF24 = f24[u] + f24[v] + f24[w];
-            const sumFAll = (fAll[u] + fAll[v] + fAll[w]) / N;
-            const sumMk = mk[u] + mk[v] + mk[w];
-            const sumCooc = (coocAll[u][v] + coocAll[u][w] + coocAll[v][w]) / N;
-            const sumCooc60 = (cooc60[u][v] + cooc60[u][w] + cooc60[v][w]) / d60;
-            const pg1 = lastPairIdx[u][v] === -1 ? N : N - 1 - lastPairIdx[u][v];
-            const pg2 = lastPairIdx[u][w] === -1 ? N : N - 1 - lastPairIdx[u][w];
-            const pg3 = lastPairIdx[v][w] === -1 ? N : N - 1 - lastPairIdx[v][w];
-            const due = (pg1 >= 16 && pg1 <= 38 ? 1 : 0) + (pg2 >= 16 && pg2 <= 38 ? 1 : 0) + (pg3 >= 16 && pg3 <= 38 ? 1 : 0);
-            const sc = -sumF24 * 12 + sumFAll * 30 + sumMk * 40 + sumCooc * 50 + sumCooc60 * 20 + due * 4;
-            if (sc > bestSc) {
-              bestSc = sc;
-              bestTrio = [u, v, w];
-            }
-          }
+    const anchors = poolBase.slice(0, anchorCount);
+    let bestScore = -1e9;
+    for (let a = 0; a < anchors.length; a++) {
+      for (let b = a + 1; b < anchors.length; b++) {
+        const u = anchors[a];
+        const v = anchors[b];
+        const pg = lastPairIdx[u][v] === -1 ? N : N - 1 - lastPairIdx[u][v];
+        const sc =
+          -(f24[u] + f24[v]) * wF24 +
+          ((fAll[u] + fAll[v]) / N) * 30 +
+          (mk[u] + mk[v]) * wMarkov +
+          (coocAll[u][v] / N) * wCoocAll +
+          (cooc60[u][v] / d60) * wCooc60 +
+          (pg >= dueMin && pg <= dueMax ? 6 : 0);
+        if (sc > bestScore) {
+          bestScore = sc;
+          pair = u < v ? [u, v] : [v, u];
         }
       }
-      const pairs = [
-        [bestTrio[0], bestTrio[1]],
-        [bestTrio[0], bestTrio[2]],
-        [bestTrio[1], bestTrio[2]]
-      ].sort((pA, pB) => coocAll[pB[0]][pB[1]] - coocAll[pA[0]][pA[1]]);
-      pair = pairs[0].sort((x, y) => x - y);
-      backupC = bestTrio.find((x) => x !== pair[0] && x !== pair[1]) || bestTrio[2];
-      backupD = poolBase.find((x) => !bestTrio.includes(x)) || 4;
-      reason = `Tam giác C(8,3) [${bestTrio.map(pad2).join('-')}] tối đa hóa đồng xuất hiện cả 3 cạnh + Markov để săn nổ trọn 3/3 (x40).`;
-    } else {
-      // hybrid_markov_cooc
-      const anchors = poolBase.slice(0, 6);
-      let bestScore = -1e9;
-      for (let a = 0; a < anchors.length; a++) {
-        for (let b = a + 1; b < anchors.length; b++) {
-          const u = anchors[a];
-          const v = anchors[b];
-          const pg = lastPairIdx[u][v] === -1 ? N : N - 1 - lastPairIdx[u][v];
-          const sc =
-            -(f24[u] + f24[v]) * 12 +
-            ((fAll[u] + fAll[v]) / N) * 30 +
-            (mk[u] + mk[v]) * 40 +
-            (coocAll[u][v] / N) * 60 +
-            (cooc60[u][v] / d60) * cfg.wCooc60 +
-            (pg >= 16 && pg <= 38 ? 6 : 0);
-          if (sc > bestScore) {
-            bestScore = sc;
-            pair = u < v ? [u, v] : [v, u];
-          }
-        }
-      }
-      const rem = anchors.filter((x) => x !== pair[0] && x !== pair[1]);
-      backupC = rem[0] || (pair[1] < 80 ? pair[1] + 1 : 1);
-      backupD = rem[1] || (backupC < 80 ? backupC + 1 : 2);
-      const [A, B] = pair;
-      const pg = lastPairIdx[A][B] === -1 ? N : N - 1 - lastPairIdx[A][B];
-      const ga = lastNumIdx[A] === -1 ? N : N - 1 - lastNumIdx[A];
-      const gb = lastNumIdx[B] === -1 ? N : N - 1 - lastNumIdx[B];
-      reason =
-        `Khử bóng chết (gan ${ga}k & ${gb}k ≤ ${cfg.maxNumGap}k), chọn Cặp [${pad2(A)}-${pad2(B)}] dẫn đầu điểm nén + Markov` +
-        (pg >= 16 && pg <= 38
-          ? ` (gan cặp ${pg}k đúng điểm rơi) + mảnh ghép B3 [${pad2(backupC)}].`
-          : ` kết hợp mảnh ghép B3 [${pad2(backupC)}] nâng tỷ lệ Bậc 3 lên 18.29%.`);
     }
+
+    const rem = anchors.filter((x) => x !== pair[0] && x !== pair[1]);
+    backupC = rem[0] || (pair[1] < 80 ? pair[1] + 1 : 1);
+    backupD = rem[1] || (backupC < 80 ? backupC + 1 : 2);
+    const [A, B] = pair;
+    const pg = lastPairIdx[A][B] === -1 ? N : N - 1 - lastPairIdx[A][B];
+    const ga = lastNumIdx[A] === -1 ? N : N - 1 - lastNumIdx[A];
+    const gb = lastNumIdx[B] === -1 ? N : N - 1 - lastNumIdx[B];
+
+    const focusDesc =
+      mode === 'triad_synergy_core'
+        ? `tối đa hóa cặp 2/2`
+        : mode === 'triad_jackpot_33'
+        ? `quét Top ${anchorCount} cộng hưởng Bộ 3`
+        : `dẫn đầu điểm nén + Markov`;
+    reason =
+      `Khử bóng chết (gan ${ga}k & ${gb}k ≤ ${cfg.maxNumGap}k), lọc Top ${anchorCount} chọn Cặp [${pad2(A)}-${pad2(B)}] ${focusDesc}` +
+      (pg >= dueMin && pg <= dueMax
+        ? ` (gan cặp ${pg}k đúng điểm rơi) + mảnh ghép B3 [${pad2(backupC)}].`
+        : ` kết hợp mảnh ghép B3 [${pad2(backupC)}] tối ưu hóa chu kỳ nổ.`);
   }
 
   const [A, B] = pair;
@@ -400,6 +388,9 @@ function runAllStrategiesSinglePass(draws, activeMode) {
       pSessionId: 1,
       pSessionBank: INITIAL_BANKROLL,
       pStepIdx: 0,
+      pWaitingForTrigger: false,
+      pJustSkippedCooldown: false,
+      pRecentB3HitsWindow: [],
       pCompletedSessions: 0,
       pWinSessions: 0,
       pEvenSessions: 0,
@@ -457,11 +448,15 @@ function runAllStrategiesSinglePass(draws, activeMode) {
       else if (w3HitCount === 3) acc.bac3Hit3Count++;
       const bac3Prize = w3HitCount === 3 ? BAC3_PRIZE_3 : w3HitCount === 2 ? BAC3_PRIZE_2 : 0;
 
-      // IMPORTANT: Read virtual gap STRICTLY BEFORE updating acc.wheel3CurGap with this draw
+      const w3Pairs = w3HitCount >= 2 ? (w3HitCount * (w3HitCount - 1)) / 2 : 0;
+      const w3Prize = w3Pairs * BAC2_PRIZE;
+
+      // IMPORTANT: Read virtual gap & recent 6-draw density STRICTLY BEFORE updating with this draw
       const preDrawVGapB3 = acc.wheel3CurGap;
+      const recentHits6 = acc.pRecentB3HitsWindow.reduce((s, v) => s + v, 0);
 
       // Update 100k Smart Player Wallet
-      let pActionLabel = '⏸️ Nghỉ 0đ (Né nhịp xả)';
+      let pActionLabel = '⏸️ Nghỉ 0đ (Chờ cầu mồi)';
       let pStake = 0;
       let pPrize = 0;
       let pBankAfter = acc.pSessionBank;
@@ -469,26 +464,41 @@ function runAllStrategiesSinglePass(draws, activeMode) {
       let pStepNum = acc.pStepIdx + 1;
       const pSessionNum = acc.pSessionId;
 
-      if (preDrawVGapB3 === 2) {
+      if (acc.pWaitingForTrigger && preDrawVGapB3 === 0 && recentHits6 < 4) {
+        acc.pWaitingForTrigger = false;
+      }
+      if (!acc.pWaitingForTrigger && acc.pStepIdx === 0 && recentHits6 >= 4) {
+        acc.pWaitingForTrigger = true;
+      }
+
+      if (acc.pWaitingForTrigger) {
         acc.pSkippedDraws++;
+        pActionLabel = recentHits6 >= 4 ? '⏸️ Nghỉ 0đ (Xả nhiệt)' : '⏸️ Nghỉ 0đ (Chờ cầu mồi)';
+      } else if (acc.pStepIdx === 3 && !acc.pJustSkippedCooldown && recentHits6 >= 2) {
+        acc.pJustSkippedCooldown = true;
+        acc.pSkippedDraws++;
+        pActionLabel = '⏸️ Nghỉ 0đ (Né nhịp xả)';
       } else {
+        acc.pJustSkippedCooldown = false;
         acc.pPlayedDraws++;
         const stepCfg = PLAYER_100K_STEPS[acc.pStepIdx];
         pStake = stepCfg.stake;
         pActionLabel = stepCfg.shortLabel;
-        const mult = pStake / TICKET_STAKE;
         acc.pSessionBank -= pStake;
         acc.pTotalSpent += pStake;
 
-        pPrize =
-          stepCfg.type === 'B3'
-            ? bac3Prize * mult
-            : (wonBac2 ? BAC2_PRIZE : 0) * mult;
+        if (stepCfg.type === 'B3') {
+          pPrize = bac3Prize * (pStake / TICKET_STAKE);
+        } else if (stepCfg.type === 'W3') {
+          pPrize = w3Prize * (pStake / (3 * TICKET_STAKE));
+        } else {
+          pPrize = (wonBac2 ? BAC2_PRIZE : 0) * (pStake / TICKET_STAKE);
+        }
         acc.pSessionBank += pPrize;
         acc.pTotalReturned += pPrize;
         pBankAfter = acc.pSessionBank;
 
-        if (acc.pSessionBank >= INITIAL_BANKROLL) {
+        if (acc.pSessionBank >= INITIAL_BANKROLL && pPrize > 0) {
           acc.pCompletedSessions++;
           const net = acc.pSessionBank - INITIAL_BANKROLL;
           acc.pNetProfit += net;
@@ -502,6 +512,7 @@ function runAllStrategiesSinglePass(draws, activeMode) {
           acc.pSessionId++;
           acc.pSessionBank = INITIAL_BANKROLL;
           acc.pStepIdx = 0;
+          acc.pWaitingForTrigger = false;
         } else if (acc.pStepIdx === PLAYER_100K_STEPS.length - 1) {
           acc.pCompletedSessions++;
           acc.pStopLossSessions++;
@@ -510,13 +521,13 @@ function runAllStrategiesSinglePass(draws, activeMode) {
           acc.pSessionId++;
           acc.pSessionBank = INITIAL_BANKROLL;
           acc.pStepIdx = 0;
+          acc.pWaitingForTrigger = true;
         } else {
           pOutcome = 'IN_PROGRESS';
           acc.pStepIdx++;
         }
       }
 
-      const w3Pairs = w3HitCount >= 2 ? (w3HitCount * (w3HitCount - 1)) / 2 : 0;
       if (w3Pairs > 0) {
         acc.wheel3WinDraws++;
         acc.wheel3PairsWon += w3Pairs;
@@ -525,6 +536,9 @@ function runAllStrategiesSinglePass(draws, activeMode) {
         acc.wheel3CurGap++;
         if (acc.wheel3CurGap > acc.wheel3MaxGap) acc.wheel3MaxGap = acc.wheel3CurGap;
       }
+
+      acc.pRecentB3HitsWindow.push(w3HitCount >= 2 ? 1 : 0);
+      if (acc.pRecentB3HitsWindow.length > 6) acc.pRecentB3HitsWindow.shift();
 
       const w4Matched = pick.wheel4.numbers.filter((x) => numSet.has(x));
       const w4Pairs = w4Matched.length >= 2 ? (w4Matched.length * (w4Matched.length - 1)) / 2 : 0;
@@ -560,7 +574,9 @@ function runAllStrategiesSinglePass(draws, activeMode) {
           wheel3Labels: pick.wheel3.labels,
           wheel3Matched: w3Matched.map(pad2),
           wheel3PairsWon: w3Pairs,
-          wheel3Prize: w3Pairs * BAC2_PRIZE,
+          wheel3Prize: w3Prize,
+          preDrawVGapB3,
+          recentHits6,
           player: {
             sessionId: pSessionNum,
             stepNum: pStepNum,
@@ -711,28 +727,56 @@ function summarizeModeStats(mode, acc, evalCount) {
 }
 
 function buildNextPlayerAction(acc, nextSelection, nextDrawId) {
-  const isSkip = acc.wheel3CurGap === 2;
+  const recentHits6 = acc.pRecentB3HitsWindow.reduce((s, v) => s + v, 0);
+  let waitingForTrigger = acc.pWaitingForTrigger;
+  if (waitingForTrigger && acc.wheel3CurGap === 0 && recentHits6 < 4) {
+    waitingForTrigger = false;
+  }
+  if (!waitingForTrigger && acc.pStepIdx === 0 && recentHits6 >= 4) {
+    waitingForTrigger = true;
+  }
+  const isCooldownSkip =
+    !waitingForTrigger && acc.pStepIdx === 3 && !acc.pJustSkippedCooldown && recentHits6 >= 2;
+  const isSkip = waitingForTrigger || isCooldownSkip;
+
   const curStepIdx = acc.pStepIdx;
   const stepCfg = PLAYER_100K_STEPS[curStepIdx];
   const trioStr = nextSelection.trioLabels.join(' - ');
   const pairStr = nextSelection.pairLabels.join(' - ');
   const spentSoFar = INITIAL_BANKROLL - acc.pSessionBank;
 
-  let actionType = stepCfg.type === 'B3' ? 'BET_B3' : 'BET_B2_RESCUE';
+  let actionType =
+    stepCfg.type === 'B3' ? 'BET_B3' : stepCfg.type === 'W3' ? 'BET_W3_WHEEL' : 'BET_B2_RESCUE';
   let recommendedStake = stepCfg.stake;
   let ticketInstruction = '';
 
-  if (isSkip) {
+  if (waitingForTrigger) {
     actionType = 'SKIP_OBSERVE';
     recommendedStake = 0;
-    ticketInstruction = `⏸️ Kỳ #${nextDrawId} ĐỨNG NGOÀI QUAN SÁT (0đ): Bộ số vừa trượt đúng 2 kỳ liên tiếp (nhịp xả cầu, xác suất xuống thấp). Giữ nguyên ví ${acc.pSessionBank.toLocaleString('vi-VN')}đ chờ kỳ kế tiếp vào Bước ${stepCfg.step}/5!`;
+    if (recentHits6 >= 4) {
+      ticketInstruction = `⏸️ Kỳ #${nextDrawId} NGHỈ XẢ NHIỆT (0đ): Bộ số vừa nổ dày (${recentHits6}/6 kỳ gần nhất). Giữ nguyên ví ${acc.pSessionBank.toLocaleString('vi-VN')}đ chờ nhịp xả xong và có kỳ nổ mồi mới!`;
+    } else {
+      ticketInstruction = `⏸️ Kỳ #${nextDrawId} KHÓA VÍ CHỜ CẦU MỒI (0đ): Đang giữ nguyên ${acc.pSessionBank.toLocaleString('vi-VN')}đ tránh chuỗi gan lạnh (đang trượt ${acc.wheel3CurGap}k). Chỉ mở phiên B1 khi có 1 kỳ nổ mồi 2/3 hoặc 3/3!`;
+    }
+  } else if (isCooldownSkip) {
+    actionType = 'SKIP_OBSERVE';
+    recommendedStake = 0;
+    ticketInstruction = `⏸️ Kỳ #${nextDrawId} ĐỨNG NGOÀI QUAN SÁT (0đ): Cầu đã nổ ${recentHits6}/6 kỳ gần nhất nên tạm né 1 kỳ xả trước khi vào Bước 4/5 (30k Đá B2). Giữ nguyên ví ${acc.pSessionBank.toLocaleString('vi-VN')}đ!`;
   } else if (stepCfg.type === 'B3') {
     const mult = stepCfg.stake / TICKET_STAKE;
     const ret2 = 20000 * mult;
     const ret3 = 400000 * mult;
     const afterBank2 = acc.pSessionBank - stepCfg.stake + ret2;
-    const outcomeWord = afterBank2 > INITIAL_BANKROLL ? `LÃI +${(afterBank2 - INITIAL_BANKROLL).toLocaleString('vi-VN')}đ` : `HÒA ĐÚNG 100.000đ`;
+    const outcomeWord =
+      afterBank2 > INITIAL_BANKROLL
+        ? `LÃI +${(afterBank2 - INITIAL_BANKROLL).toLocaleString('vi-VN')}đ`
+        : `HÒA ĐÚNG 100.000đ`;
     ticketInstruction = `🎯 Kỳ #${nextDrawId} (Bước ${stepCfg.step}/5): Mua vé Keno BẬC 3 bộ [${trioStr}] mệnh giá ${stepCfg.stake.toLocaleString('vi-VN')}đ. Trúng 2/3 thu ${ret2.toLocaleString('vi-VN')}đ (${outcomeWord}) · Trúng 3/3 thu ${ret3.toLocaleString('vi-VN')}đ!`;
+  } else if (stepCfg.type === 'W3') {
+    const pairsText = nextSelection.wheel3.pairs.map((p) => `[${pad2(p[0])}-${pad2(p[1])}]`).join(', ');
+    const afterWin1 = acc.pSessionBank - stepCfg.stake + BAC2_PRIZE;
+    const net1 = afterWin1 - INITIAL_BANKROLL;
+    ticketInstruction = `🔥 Kỳ #${nextDrawId} (Bước 4/5 — Đá Vòng 3 Cặp B2): Mua 3 vé BẬC 2 (${pairsText}) x 10.000đ = 30.000đ. Trúng bất kỳ 2/3 số thu 90.000đ (${net1 >= 0 ? `LÃI +${net1.toLocaleString('vi-VN')}đ` : `còn ${afterWin1.toLocaleString('vi-VN')}đ`}) · Nổ 3/3 thu 270.000đ!`;
   } else {
     ticketInstruction = `🛡️ Kỳ #${nextDrawId} (Bước 5/5 — Phao Cứu Sinh Bậc 2): Mua vé Keno BẬC 2 Cặp Chủ Lực [${pairStr}] mệnh giá 10.000đ (luôn giữ 10.000đ dự phòng). Nổ 2/2 thu 90.000đ đưa ví về đúng 100.000đ HÒA VỐN!`;
   }
@@ -743,6 +787,7 @@ function buildNextPlayerAction(acc, nextSelection, nextDrawId) {
     spentSoFar,
     reserveProtected: 10000,
     vGapB3: acc.wheel3CurGap,
+    recentHits6,
     isCooldownSkip: isSkip,
     actionType,
     stepNumber: stepCfg.step,
@@ -768,6 +813,13 @@ export function computePairAnalytics(draws, finalState, predictedPair, mode = DE
   const mk = getMarkovVector(finalState);
   const predKey = `${predictedPair[0]}-${predictedPair[1]}`;
 
+  const wF24 = cfg.wF24 ?? 13;
+  const wMarkov = cfg.wMarkov ?? 45;
+  const wCoocAll = cfg.wCoocAll ?? 55;
+  const wCooc60 = cfg.wCooc60 ?? 35;
+  const dueMin = cfg.dueMin ?? 14;
+  const dueMax = cfg.dueMax ?? 38;
+
   const allPairs = [];
   for (let u = 1; u <= 80; u++) {
     for (let v = u + 1; v <= 80; v++) {
@@ -779,12 +831,12 @@ export function computePairAnalytics(draws, finalState, predictedPair, mode = DE
       const deadPenalty = ga > cfg.maxNumGap || gb > cfg.maxNumGap ? -400 : 0;
       const reboundScore =
         deadPenalty -
-        sumF24 * 12 +
+        sumF24 * wF24 +
         ((fAll[u] + fAll[v]) / N) * 30 +
-        (mk[u] + mk[v]) * 40 +
-        (cooc / N) * 60 +
-        (cooc60[u][v] / d60) * cfg.wCooc60 +
-        (pg >= 16 && pg <= 38 ? 6 : 0);
+        (mk[u] + mk[v]) * wMarkov +
+        (cooc / N) * wCoocAll +
+        (cooc60[u][v] / d60) * wCooc60 +
+        (pg >= dueMin && pg <= dueMax ? 6 : 0);
 
       allPairs.push({
         pair: [u, v],
